@@ -1,0 +1,15 @@
+# Ambiente virtual: pode ser recriado com o requirements.txt
+.venv/
+
+# Arquivos que o Python gera sozinho
+__pycache__/
+*.pyc
+
+# Cache do pytest
+.pytest_cache/
+
+# Banco SQLite local: dados de desenvolvimento, não código
+*.db
+
+# Segredos, como senhas: nunca devem ser publicados
+.env
