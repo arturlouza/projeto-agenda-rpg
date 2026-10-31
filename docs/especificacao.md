@@ -62,8 +62,9 @@ Todos os números ficam como constantes no topo de `backend/app/rules/xp.py`, pa
 - Cada adiamento tira 25%: 1 adiamento vale 75%, 2 valem 50% e 3 valem 25%.
 - Um adiamento acontece de duas formas: quando você muda a data da tarefa para depois, ou quando o dia passa sem ela ser concluída (cada dia de atraso conta como um adiamento).
 - Depois de 3 adiamentos, a tarefa **perde o XP**: ainda dá para concluí-la, mas ela vale 0. O botão "Adiar" fica bloqueado.
+- O resultado é sempre arredondado para baixo, para um número inteiro, como no D&D. Exemplo: 25 × 75% = 18,75 vira 18.
 
-Em código: `adiamentos_efetivos = adiamentos_manuais + dias_de_atraso`. Se for maior que 3, o XP é 0; senão, `XP = XP_base × (1 − 0,25 × adiamentos_efetivos)`.
+Em código: `adiamentos_efetivos = adiamentos_manuais + dias_de_atraso`. Se for maior que 3, o XP é 0; senão, `XP = arredondar_para_baixo(XP_base × (1 − 0,25 × adiamentos_efetivos))`.
 
 ### 4.3 Desmarcar
 
