@@ -1,7 +1,8 @@
 # Agenda RPG
 
-Um app de tarefas pessoal com regras de RPG. Concluir tarefas dá XP, e o XP faz o jogador subir de nível.
-É um PWA pensado para o celular, com visão do dia e da semana. Nas próximas versões, entram missões, habilidades, atributos e personagem.
+Um app de tarefas com regras de RPG: concluir tarefas dá XP, e o XP faz o jogador subir de nível.
+
+É um projeto de estudo, feito para eu aprender desenvolvimento na prática. O app está sendo pensado para uso no celular Android, como app web instalável (PWA).
 
 ## Stack
 

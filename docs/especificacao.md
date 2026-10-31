@@ -266,7 +266,7 @@ Uma tarefa por sessão do Claude Code. Cada uma termina com o app funcionando, t
 | 15 | Proteção por senha única no back-end | Sem a senha, a API recusa os pedidos |
 | 16 | Publicação: front no GitHub Pages, back e PostgreSQL num serviço gratuito | O app abre e instala no celular, fora de casa |
 
-**Detalhe sobre testar no celular:** antes da publicação, dá para abrir o app no Xiaomi pelo Wi-Fi de casa (usando o IP do computador), mas o botão de instalar só aparece com HTTPS. A instalação de verdade vem na tarefa 16.
+**Detalhe sobre testar no celular:** antes da publicação, dá para abrir o app no celular Android pelo Wi-Fi de casa (usando o IP do computador), mas o botão de instalar só aparece com HTTPS. A instalação de verdade vem na tarefa 16.
 
 ## 11. Fica para depois
 
