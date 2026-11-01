@@ -203,7 +203,7 @@ Mudanças:
 
 Recusas:
 
-- **422:** dado inválido, ou seja, os casos da lista de campos e a data nova anterior a hoje.
+- **422:** dado inválido, ou seja, os casos da lista de campos, a data nova anterior a hoje e campo desconhecido no pedido.
 - **409:** dado válido, mas o estado da tarefa impede: mudar a data de uma tarefa travada (seção 4.2), ou mudar a dificuldade ou a data de uma tarefa concluída.
 - O pedido recusado não grava nada.
 
@@ -253,6 +253,7 @@ A V1 precisa de internet:
 ### 6.6 Diferenças conhecidas entre os bancos
 
 - **Ids:** o SQLite reaproveita ids quando os maiores são excluídos (uma tabela vazia volta ao id 1); o PostgreSQL não. Por isso vale a regra de ids da seção 6.1.
+- **Caractere NUL:** o PostgreSQL recusa o caractere NUL (`\u0000`) em texto; o SQLite aceita. A validação que resolve isso é item obrigatório da tarefa 16.
 
 ## 7. Versão 2 em detalhe: tarefas repetidas
 
@@ -387,7 +388,7 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 
 **Etapa 5.4: criar tarefa**
 
-- **Entrega:** `POST /tasks` com as regras de campos da seção 6.1 e a regra da data nova. A entrada não aceita `postponements` nem `completed`.
+- **Entrega:** `POST /tasks` com as regras de campos da seção 6.1 e a regra da data nova. A entrada não aceita `postponements` nem `completed`: como todo campo desconhecido, eles são recusados com 422.
 - **Arquivos:** `app/routers/tasks.py` (novo), `app/main.py`, `tests/test_tasks.py` (novo).
 - **Como testar:** `pytest tests/test_tasks.py`. No `/docs`, criar uma tarefa válida e tentar uma com cor `#FFF` e outra com data de ontem.
 - **Pronto quando:** cada regra de campo tem um caso aceito e um recusado; `task_type_id` inexistente ou fora do intervalo dá 422 com mensagem clara, nunca 500; o pedido recusado não grava nada; hoje é aceito e ontem é recusado, com "hoje" fixo no teste.
@@ -445,6 +446,7 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 - A restauração não passa pela regra da data nova, senão tarefas antigas seriam recusadas.
 - A restauração não grava os ids do arquivo: o banco gera ids novos e as referências são traduzidas. Gravar ids à mão não avança o contador do PostgreSQL, e o próximo registro criado colidiria.
 - Substituir tudo ou aceitar só banco vazio é decidido nessa tarefa.
+- **Obrigatório antes da publicação:** uma validação única de texto, usada por tipos e tarefas (nome, título e notas), que recusa com 422 o caractere NUL (`\u0000`) e caracteres Unicode inválidos como `\ud800`, com testes. Objetivo: nenhuma entrada de texto pode virar erro 500.
 
 ## 11. Fica para depois
 
