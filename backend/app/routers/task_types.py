@@ -37,7 +37,11 @@ def get_task_type_or_404(session: Session, task_type_id: int) -> TaskType:
     return task_type
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    responses={409: {"description": "Já existe um tipo com esse nome."}},
+)
 def create_task_type(task_type_input: TaskTypeInput, session: SessionDep) -> TaskType:
     if name_is_taken(session, task_type_input.name):
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Já existe um tipo com esse nome.")
@@ -55,7 +59,13 @@ def list_task_types(session: SessionDep) -> list[TaskType]:
     return list(session.exec(select(TaskType).order_by(TaskType.id)).all())
 
 
-@router.patch("/{task_type_id}")
+@router.patch(
+    "/{task_type_id}",
+    responses={
+        404: {"description": "Tipo de tarefa não encontrado."},
+        409: {"description": "Já existe um tipo com esse nome."},
+    },
+)
 def rename_task_type(
     task_type_id: int, task_type_input: TaskTypeInput, session: SessionDep
 ) -> TaskType:
@@ -73,7 +83,11 @@ def rename_task_type(
 
 # As tarefas do tipo ficam sem tipo; nenhuma é apagada. Tudo vale só no commit, numa
 # única transação: se algo falhar no meio, nada muda no banco.
-@router.delete("/{task_type_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{task_type_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={404: {"description": "Tipo de tarefa não encontrado."}},
+)
 def delete_task_type(task_type_id: int, session: SessionDep) -> None:
     task_type = get_task_type_or_404(session, task_type_id)
 
