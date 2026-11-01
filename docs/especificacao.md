@@ -346,6 +346,96 @@ Uma tarefa por sessão do Claude Code. Cada uma termina com o app funcionando, t
 | 16 | Dados reais: migrações com Alembic (dependência nova, autorizada nesta tarefa), URL do banco em variável de ambiente, rota de exportação e restauração a partir do arquivo exportado | As migrações criam um banco novo, e exportar, apagar e restaurar devolve os mesmos dados e o mesmo XP total |
 | 17 | Publicação: front no GitHub Pages, back e PostgreSQL num serviço gratuito cujo banco não expira, com o CORS do back liberado para o endereço do GitHub Pages | O app abre e instala no celular, fora de casa |
 
+**Divisão da tarefa 5:**
+
+A tarefa 5 é grande demais para uma sessão, então vira 9 etapas, feitas nesta ordem. Cada etapa tem plano próprio, em sessão nova, e só começa depois do commit da anterior. Os caminhos abaixo são relativos a `backend/`, menos o `CLAUDE.md`.
+
+Por que esta ordem: 5.1 vem primeiro porque é a única etapa que muda tabela (o `agenda.db` só é apagado essa vez). 5.2 e 5.3 são a base sem banco, que as rotas usam. Depois vem criar, porque sem tarefas não há o que listar; listar, para ver o resultado; e por último editar, que é a parte com mais regras. A mudança de data fecha a tarefa.
+
+Fatos conferidos ao fazer a divisão, com SQLModel 0.0.48 e 72 testes passando:
+
+- O `tzdata` não estava instalado, e `ZoneInfo("America/Sao_Paulo")` falhava. A etapa 5.2 resolve.
+- Um campo `datetime` no modelo já usa `UTCDateTime` e volta em UTC. Falta só o `created_at` do `TaskType`.
+- O `UTCDateTime` recusa gravar data sem fuso (dá erro). Testes que gravam `completed_at` direto no banco precisam usar data com fuso.
+- Filtrar concluídas por intervalo de horário em UTC funcionou no SQLite, com o caso das 22h30.
+- A data `9999-12-31` é aceita, mas somar um dia a ela dá `OverflowError`. Sem cuidado, as listagens responderiam 500.
+
+Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por isso, tarefas concluídas e atrasadas só aparecem nos testes, inseridas direto no banco. Pelo `/docs` não dá para criá-las.
+
+**Etapa 5.1: tipos ordenados por `created_at`**
+
+- **Entrega:** `TaskType` ganha `created_at`. A listagem ordena por ele, com o id só como desempate. O comentário em `task_types.py` que fala da ordem por id é corrigido.
+- **Arquivos:** `app/models.py`, `app/routers/task_types.py`, `tests/test_task_types.py`. Fora do Git: apagar `backend/agenda.db`, com um comando que eu mesmo rodo.
+- **Como testar:** `pytest`. Depois, apagar o banco, subir o app e, no `/docs`, criar dois tipos e listar.
+- **Pronto quando:** um teste prova que a ordem vem do `created_at` (um tipo com id maior e data mais antiga vem primeiro) e que o empate cai no id; `GET /task-types` mostra o `created_at`; todos os testes passam.
+- **Atenção:** `test_rename_changes_the_name` compara o JSON exato e vai quebrar, porque a resposta ganha um campo. Ele precisa ser ajustado.
+
+**Etapa 5.2: função auxiliar de datas**
+
+- **Entrega:** `tzdata` no `requirements.txt` (versão fixa, `2026.6`), a constante `APP_TIMEZONE` e as funções para "que dia é agora em Brasília" e "em que dia de Brasília caiu esta data e hora". Data sem fuso é tratada como UTC.
+- **Arquivos:** `requirements.txt`, `app/dates.py` (novo), `tests/test_dates.py` (novo), `CLAUDE.md` (uma linha na estrutura de pastas).
+- **Como testar:** `pip install -r requirements.txt` e `pytest tests/test_dates.py`. Ainda não muda nada no `/docs`.
+- **Pronto quando:** 01h30 UTC de 01/11 dá 31/10; a mesma hora sem fuso dá o mesmo resultado; o "hoje" vira à meia-noite de Brasília, não à de UTC, testado com hora fixa.
+- **Decisão:** o arquivo fica em `app/dates.py`, fora de `rules/`, porque data não é regra do jogo. A estrutura de pastas do `CLAUDE.md` não previa esse arquivo.
+
+**Etapa 5.3: regras puras de adiamento em `xp.py`**
+
+- **Entrega:** `task_xp` trata atraso negativo como 0. Uma única conta de adiamentos efetivos, usada pelo XP e pela trava. Uma função que diz se a data está travada e outra que calcula o novo contador depois de mudar a data.
+- **Arquivos:** `app/rules/xp.py`, `tests/test_xp.py`.
+- **Como testar:** `pytest tests/test_xp.py`.
+- **Pronto quando:** os exemplos da seção 4.2 viram testes: `0 + 2 + 1 = 3`; 3 adiamentos com data 5 dias à frente continua travada; antecipar não conta; exatamente 3 vale 25% e mais de 3 vale 0. Os testes antigos continuam passando.
+
+**Etapa 5.4: criar tarefa**
+
+- **Entrega:** `POST /tasks` com as regras de campos da seção 6.1 e a regra da data nova. A entrada não aceita `postponements` nem `completed`.
+- **Arquivos:** `app/routers/tasks.py` (novo), `app/main.py`, `tests/test_tasks.py` (novo).
+- **Como testar:** `pytest tests/test_tasks.py`. No `/docs`, criar uma tarefa válida e tentar uma com cor `#FFF` e outra com data de ontem.
+- **Pronto quando:** cada regra de campo tem um caso aceito e um recusado; `task_type_id` inexistente ou fora do intervalo dá 422 com mensagem clara, nunca 500; o pedido recusado não grava nada; hoje é aceito e ontem é recusado, com "hoje" fixo no teste.
+- **Reaproveita:** `SessionDep` e `MAX_ID` de `task_types.py`, `DEFAULT_TASK_COLOR` de `models.py`. O "hoje" fixo usa o `monkeypatch` do próprio pytest, sem dependência nova.
+
+**Etapa 5.5: listar por dia**
+
+- **Entrega:** uma rota que recebe a data e devolve três grupos: atrasadas (só quando a data é hoje), pendentes e concluídas, na ordem da seção 6.2.
+- **Arquivos:** `app/routers/tasks.py`, `app/dates.py` (início e fim do dia em Brasília), `tests/test_tasks.py`, `tests/test_dates.py`.
+- **Como testar:** `pytest tests/test_tasks.py`. No `/docs`, ver a tarefa criada no dia dela. Atrasadas e concluídas só nos testes.
+- **Pronto quando:** a concluída às 22h30 de 31/10 aparece em 31/10 e não em 01/11; as atrasadas só aparecem na visão de hoje, da mais antiga para a mais recente; as ordens e os desempates estão testados; `9999-12-31` não vira 500.
+
+**Etapa 5.6: listar por semana**
+
+- **Entrega:** uma rota que recebe qualquer data e devolve os sete dias da semana dela, de segunda a domingo. Cada dia traz uma lista só, com pendentes e concluídas juntas, por ordem de criação (é o que a seção 6.2 pede para as colunas).
+- **Arquivos:** `app/routers/tasks.py`, `app/dates.py` (segunda-feira da semana), `tests/test_tasks.py`, `tests/test_dates.py`.
+- **Como testar:** `pytest tests/test_tasks.py`. No `/docs`, pedir a semana passando uma quarta-feira e depois um domingo.
+- **Pronto quando:** segunda e domingo dão a mesma semana; a concluída às 22h30 de domingo fica naquela semana, não na seguinte; a semana de `9999-12-31` não vira 500.
+
+**Etapa 5.7: excluir tarefa**
+
+- **Entrega:** `DELETE /tasks/{id}`. As linhas da tarefa no histórico ficam com `task_id` nulo e mantêm o valor, tudo na mesma transação.
+- **Arquivos:** `app/routers/tasks.py`, `tests/test_tasks.py`.
+- **Como testar:** `pytest tests/test_tasks.py`. No `/docs`, excluir uma tarefa e ver que ela sumiu da lista.
+- **Pronto quando:** 204 ao excluir, 404 para id desconhecido, 422 para id fora do intervalo; com um `XpEntry` inserido direto no banco (gerar XP é da tarefa 6), a soma do XP não muda e as linhas de outras tarefas ficam intactas.
+- **Reaproveita:** o padrão de `delete_task_type`, com `flush` antes de excluir.
+
+**Etapa 5.8: editar tarefa, ainda sem mudar a data**
+
+- **Entrega:** rota de edição de título, notas, cor, dificuldade e tipo, com as mesmas validações da criação. Em tarefa concluída, mudar a dificuldade dá 409 e mandar o mesmo valor passa.
+- **Arquivos:** `app/routers/tasks.py`, `tests/test_tasks.py`.
+- **Como testar:** `pytest tests/test_tasks.py`. No `/docs`, editar uma tarefa e listar para conferir.
+- **Pronto quando:** cada campo é editado e validado; o pedido recusado não grava nada; tarefa concluída aceita título, notas, cor e tipo; 404 e 422 de id funcionam.
+- **A decidir no plano desta etapa:** o que acontece com um campo ausente na edição. Recomendação: exigir todos os campos, já que o formulário envia todos. Assim, esquecer um campo não apaga as notas nem volta a cor ao padrão.
+
+**Etapa 5.9: mudança de data na edição (fecha a tarefa 5)**
+
+- **Entrega:** a edição passa a aceitar `due_date`, com as regras da seção 4.2 e a regra do "mesmo valor". A lógica fica numa função que a tarefa 7 vai reaproveitar. A rota do botão Adiar não entra aqui.
+- **Arquivos:** `app/routers/tasks.py`, `tests/test_tasks.py`.
+- **Como testar:** `pytest`. No `/docs`, criar uma tarefa, mudar a data para depois três vezes (`postponements` chega a 3), ver a quarta tentativa dar 409 e ver que editar só o título, mandando a mesma data, ainda funciona.
+- **Pronto quando:** este é o critério da tarefa 5 na tabela, "funciona pelo `/docs` e os testes cobrem as regras". Casos testados: data anterior a hoje dá 422; atrasada com 0 adiamentos e 2 dias de atraso fica com contador 3; antecipar não conta; travada por atraso ou por adiamento manual recusa até antecipar (409); concluída recusa mudar a data (409); travada ou atrasada aceita editar o título; o pedido recusado não grava nada.
+- **A decidir no plano desta etapa:** qual recusa vale quando 422 e 409 se aplicam ao mesmo pedido. Recomendação: o 422 primeiro, porque o dado é conferido antes do estado da tarefa.
+
+**Fora da tarefa 5:**
+
+- Concluir e desmarcar (tarefa 6), rota do Adiar (tarefa 7), front-end (tarefas 9 em diante).
+- Campo que diz à tela se a data está travada: as tarefas 10 e 11 vão precisar dele para bloquear o botão e o formulário sem repetir a regra em JavaScript. Ele entra quando a tela precisar, para não adiantar tarefa.
+
 **Detalhe sobre testar no celular:** antes da publicação, dá para abrir o app no celular Android pelo Wi-Fi de casa (usando o IP do computador), mas o botão de instalar só aparece com HTTPS. A instalação de verdade vem na tarefa 17.
 
 **Detalhes sobre a tarefa 16:**
