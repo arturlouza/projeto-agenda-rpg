@@ -56,6 +56,7 @@ Sou dev júnior, em transição de carreira, aprendendo Python e desenvolvimento
 │   │   ├── main.py          # cria o app FastAPI e registra as rotas
 │   │   ├── database.py      # conexão com o banco e sessão
 │   │   ├── models.py        # tabelas (SQLModel)
+│   │   ├── dates.py         # fuso de Brasília e "que dia é"
 │   │   ├── rules/
 │   │   │   └── xp.py        # regras de XP e nível (funções puras)
 │   │   └── routers/         # rotas da API, uma por assunto

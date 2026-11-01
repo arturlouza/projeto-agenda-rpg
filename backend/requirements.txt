@@ -3,3 +3,4 @@ sqlmodel==0.0.48
 uvicorn==0.54.0
 pytest==9.2.0
 httpx2==2.16.0
+tzdata==2026.6
