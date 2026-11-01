@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6,7 +6,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app.database import get_session
 from app.main import app
-from app.models import Task
+from app.models import Task, TaskType
 
 
 # Banco em arquivo na pasta temporária do pytest, para nunca tocar no agenda.db real.
@@ -37,6 +37,13 @@ def create_type(client, name):
     return response.json()["id"]
 
 
+# Grava um tipo direto no banco, porque a API não deixa escolher o id nem o created_at.
+def insert_type(test_engine, task_type_id, name, created_at):
+    with Session(test_engine) as session:
+        session.add(TaskType(id=task_type_id, name=name, created_at=created_at))
+        session.commit()
+
+
 def test_create_returns_the_new_type(client):
     response = client.post("/task-types", json={"name": "Leitura"})
 
@@ -53,6 +60,35 @@ def test_list_returns_types_in_creation_order(client):
 
     assert response.status_code == 200
     assert [task_type["name"] for task_type in response.json()] == ["Treino", "Estudo"]
+
+
+def test_list_shows_created_at(client):
+    create_type(client, "Leitura")
+
+    response = client.get("/task-types")
+
+    assert response.json()[0]["created_at"].endswith("Z")
+
+
+def test_list_orders_by_created_at_not_by_id(client, test_engine):
+    insert_type(test_engine, 1, "Mais novo", datetime(2026, 2, 1, tzinfo=timezone.utc))
+    insert_type(test_engine, 2, "Mais antigo", datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    response = client.get("/task-types")
+
+    assert [task_type["id"] for task_type in response.json()] == [2, 1]
+
+
+# No SQLite, o empate já sai em ordem de id mesmo sem o desempate no ORDER BY. Este teste
+# documenta o resultado esperado, mas não detecta a remoção do desempate.
+def test_list_breaks_created_at_tie_by_id(client, test_engine):
+    created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    insert_type(test_engine, 2, "Segundo", created_at)
+    insert_type(test_engine, 1, "Primeiro", created_at)
+
+    response = client.get("/task-types")
+
+    assert [task_type["id"] for task_type in response.json()] == [1, 2]
 
 
 def test_create_removes_spaces_from_the_ends(client):
@@ -112,12 +148,14 @@ def test_names_that_differ_only_by_accent_can_coexist(client):
 
 def test_rename_changes_the_name(client):
     task_type_id = create_type(client, "Leitura")
+    created_at = client.get("/task-types").json()[0]["created_at"]
 
     response = client.patch(f"/task-types/{task_type_id}", json={"name": "Estudo"})
 
+    expected = {"id": task_type_id, "name": "Estudo", "created_at": created_at}
     assert response.status_code == 200
-    assert response.json() == {"id": task_type_id, "name": "Estudo"}
-    assert client.get("/task-types").json() == [{"id": task_type_id, "name": "Estudo"}]
+    assert response.json() == expected
+    assert client.get("/task-types").json() == [expected]
 
 
 def test_rename_can_change_only_the_case_of_its_own_name(client):

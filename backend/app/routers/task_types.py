@@ -68,10 +68,10 @@ def create_task_type(task_type_input: TaskTypeInput, session: SessionDep) -> Tas
     return task_type
 
 
-# A ordem por id (ordem de criação) é a mesma no SQLite e no PostgreSQL.
+# A ordem de criação vem do created_at. O id só desempata, em caso de empate exato.
 @router.get("")
 def list_task_types(session: SessionDep) -> list[TaskType]:
-    return list(session.exec(select(TaskType).order_by(TaskType.id)).all())
+    return list(session.exec(select(TaskType).order_by(TaskType.created_at, TaskType.id)).all())
 
 
 @router.patch(

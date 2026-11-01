@@ -367,7 +367,7 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 - **Entrega:** `TaskType` ganha `created_at`. A listagem ordena por ele, com o id só como desempate. O comentário em `task_types.py` que fala da ordem por id é corrigido.
 - **Arquivos:** `app/models.py`, `app/routers/task_types.py`, `tests/test_task_types.py`. Fora do Git: apagar `backend/agenda.db`, com um comando que eu mesmo rodo.
 - **Como testar:** `pytest`. Depois, apagar o banco, subir o app e, no `/docs`, criar dois tipos e listar.
-- **Pronto quando:** um teste prova que a ordem vem do `created_at` (um tipo com id maior e data mais antiga vem primeiro) e que o empate cai no id; `GET /task-types` mostra o `created_at`; todos os testes passam.
+- **Pronto quando:** um teste prova que a ordem vem do `created_at` (um tipo com id maior e data mais antiga vem primeiro) e que o empate aparece em ordem de id (no SQLite, esse teste não detecta a remoção do desempate); `GET /task-types` mostra o `created_at`; todos os testes passam.
 - **Atenção:** `test_rename_changes_the_name` compara o JSON exato e vai quebrar, porque a resposta ganha um campo. Ele precisa ser ajustado.
 
 **Etapa 5.2: função auxiliar de datas**

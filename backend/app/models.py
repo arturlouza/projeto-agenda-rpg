@@ -15,6 +15,7 @@ def utc_now() -> datetime:
 class TaskType(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     name: str
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 # Algo a fazer num dia.
