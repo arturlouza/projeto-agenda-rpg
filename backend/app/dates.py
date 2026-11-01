@@ -35,3 +35,14 @@ def app_day_bounds(day: date) -> tuple[datetime, datetime]:
         return app_midnight(day), datetime.max.replace(tzinfo=timezone.utc)
 
     return app_midnight(day), app_midnight(day + timedelta(days=1))
+
+
+# Devolve os dias da semana de uma data, de segunda a domingo. weekday() dá 0 na segunda
+# e 6 no domingo. A última semana do calendário termina em 9999-12-31, uma sexta-feira,
+# então ela tem só 5 dias: somar um dia a essa data daria OverflowError.
+def week_days(day: date) -> list[date]:
+    days = [day - timedelta(days=day.weekday())]
+    while len(days) < 7 and days[-1] != date.max:
+        days.append(days[-1] + timedelta(days=1))
+
+    return days

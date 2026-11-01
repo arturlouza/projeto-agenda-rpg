@@ -407,6 +407,7 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 - **Arquivos:** `app/routers/tasks.py`, `app/dates.py` (segunda-feira da semana), `tests/test_tasks.py`, `tests/test_dates.py`.
 - **Como testar:** `pytest tests/test_tasks.py`. No `/docs`, pedir a semana passando uma quarta-feira e depois um domingo.
 - **Pronto quando:** segunda e domingo dão a mesma semana; a concluída às 22h30 de domingo fica naquela semana, não na seguinte; a semana de `9999-12-31` não vira 500.
+- **Decisão:** a semana de `9999-12-31` traz só 5 dias, de 27/12 a 31/12, porque essa data é uma sexta-feira e o sábado e o domingo seguintes não existem no Python. Assim, uma tarefa marcada para esse dia continua visível na semana, o que uma recusa com 422 impediria.
 
 **Etapa 5.7: excluir tarefa**
 

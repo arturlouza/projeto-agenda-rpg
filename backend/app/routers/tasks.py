@@ -3,9 +3,9 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import ConfigDict, StringConstraints, field_validator
-from sqlmodel import Session, SQLModel, select
+from sqlmodel import Session, SQLModel, and_, or_, select
 
-from app.dates import app_day_bounds, app_today
+from app.dates import app_day_bounds, app_today, week_days
 from app.models import DEFAULT_TASK_COLOR, Task, TaskType
 from app.routers.task_types import MAX_ID, SessionDep
 
@@ -57,6 +57,12 @@ class DayTasks(SQLModel):
     completed: list[Task]
 
 
+# Um dia da visão da semana: pendentes e concluídas ficam na mesma lista (seção 6.2).
+class WeekDay(SQLModel):
+    day: date
+    tasks: list[Task]
+
+
 # Responde 422 se o tipo não existir. O intervalo é conferido antes de consultar o banco,
 # porque um id gigante daria erro ao chegar lá, e o pedido viraria um erro 500.
 def ensure_task_type_exists(session: Session, task_type_id: int) -> None:
@@ -64,6 +70,24 @@ def ensure_task_type_exists(session: Session, task_type_id: int) -> None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Esse tipo de tarefa não existe."
         )
+
+
+# Filtro das tarefas pendentes de um dia: a pendente aparece no dia marcado. O "== False" é
+# de propósito: o SQLModel transforma essa comparação em SQL, e "not Task.completed" não
+# seria transformado.
+def pending_on(day: date):
+    return and_(Task.completed == False, Task.due_date == day)
+
+
+# Filtro das tarefas concluídas de um dia: a concluída aparece no dia em que foi concluída
+# em Brasília, não no dia marcado.
+def completed_on(day: date):
+    day_start, day_end = app_day_bounds(day)
+    return and_(
+        Task.completed == True,
+        Task.completed_at >= day_start,
+        Task.completed_at < day_end,
+    )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -90,9 +114,7 @@ def create_task(task_input: TaskInput, session: SessionDep) -> Task:
     return task
 
 
-# A pendente aparece no dia marcado; a concluída, no dia em que foi concluída em Brasília.
-# As atrasadas só vêm na visão de hoje. Nos filtros, "== False" é de propósito: o SQLModel
-# transforma essa comparação em SQL, e "not Task.completed" não seria transformado.
+# As atrasadas só vêm na visão de hoje.
 @router.get("/day/{day}")
 def list_tasks_by_day(day: date, session: SessionDep) -> DayTasks:
     overdue = []
@@ -104,20 +126,27 @@ def list_tasks_by_day(day: date, session: SessionDep) -> DayTasks:
         ).all()
 
     pending = session.exec(
-        select(Task)
-        .where(Task.completed == False, Task.due_date == day)
-        .order_by(Task.created_at, Task.id)
+        select(Task).where(pending_on(day)).order_by(Task.created_at, Task.id)
     ).all()
 
-    day_start, day_end = app_day_bounds(day)
     completed = session.exec(
-        select(Task)
-        .where(
-            Task.completed == True,
-            Task.completed_at >= day_start,
-            Task.completed_at < day_end,
-        )
-        .order_by(Task.created_at, Task.id)
+        select(Task).where(completed_on(day)).order_by(Task.created_at, Task.id)
     ).all()
 
     return DayTasks(overdue=overdue, pending=pending, completed=completed)
+
+
+# Faz uma consulta por dia, com os mesmos filtros da visão do dia. Aqui não há atrasadas:
+# a tarefa atrasada aparece no dia marcado dela.
+@router.get("/week/{day}")
+def list_tasks_by_week(day: date, session: SessionDep) -> list[WeekDay]:
+    week = []
+    for week_day in week_days(day):
+        tasks = session.exec(
+            select(Task)
+            .where(or_(pending_on(week_day), completed_on(week_day)))
+            .order_by(Task.created_at, Task.id)
+        ).all()
+        week.append(WeekDay(day=week_day, tasks=tasks))
+
+    return week

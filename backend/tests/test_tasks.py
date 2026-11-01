@@ -81,9 +81,21 @@ def day_tasks(client, day):
     return response.json()
 
 
+# Pede os dias de uma semana pela API, confere que deu certo e devolve o JSON da resposta.
+def week_tasks(client, day):
+    response = client.get(f"/tasks/week/{day}")
+    assert response.status_code == 200
+    return response.json()
+
+
 # Devolve só os ids de um grupo, na ordem em que a API respondeu.
 def ids(tasks):
     return [task["id"] for task in tasks]
+
+
+# Devolve só os dias da semana que têm tarefas, cada um com os ids das tarefas dele.
+def week_ids(week):
+    return {week_day["day"]: ids(week_day["tasks"]) for week_day in week if week_day["tasks"]}
 
 
 # Confere que o pedido foi recusado com 422 e que nada foi gravado.
@@ -498,5 +510,152 @@ def test_last_date_lists_pending_and_completed_tasks(client, test_engine):
 @pytest.mark.parametrize("day", ["2026-13-01", "abc"])
 def test_day_refuses_invalid_date(client, day):
     response = client.get(f"/tasks/day/{day}")
+
+    assert response.status_code == 422
+
+
+def test_week_without_tasks_returns_seven_empty_days(client):
+    assert week_tasks(client, "2026-11-04") == [
+        {"day": "2026-11-02", "tasks": []},
+        {"day": "2026-11-03", "tasks": []},
+        {"day": "2026-11-04", "tasks": []},
+        {"day": "2026-11-05", "tasks": []},
+        {"day": "2026-11-06", "tasks": []},
+        {"day": "2026-11-07", "tasks": []},
+        {"day": "2026-11-08", "tasks": []},
+    ]
+
+
+# Em 2026, 02/11 é uma segunda, 04/11 é uma quarta e 08/11 é um domingo.
+def test_monday_wednesday_and_sunday_return_the_same_week(client):
+    create_task(client, due_date="2026-11-05")
+
+    monday_week = week_tasks(client, "2026-11-02")
+
+    assert monday_week[0]["day"] == "2026-11-02"
+    assert week_tasks(client, "2026-11-04") == monday_week
+    assert week_tasks(client, "2026-11-08") == monday_week
+
+
+def test_pending_task_appears_only_on_its_day_of_the_week(client):
+    task = create_task(client, due_date="2026-11-05")
+
+    week = week_tasks(client, "2026-11-05")
+
+    assert week[3] == {"day": "2026-11-05", "tasks": [task]}
+    assert week_ids(week) == {"2026-11-05": [task["id"]]}
+    assert week_ids(week_tasks(client, "2026-11-01")) == {}
+    assert week_ids(week_tasks(client, "2026-11-09")) == {}
+
+
+# A data marcada fica na semana seguinte, e a tarefa não pode aparecer lá.
+def test_completed_task_appears_on_the_completion_day_not_on_another_week(client, test_engine):
+    task_id = insert_task(
+        test_engine,
+        due_date=date(2026, 11, 5),
+        completed=True,
+        completed_at=datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert week_ids(week_tasks(client, "2026-10-28")) == {"2026-10-28": [task_id]}
+    assert week_ids(week_tasks(client, "2026-11-05")) == {}
+
+
+# Dentro da mesma semana, a concluída também não fica repetida no dia marcado.
+def test_completed_task_appears_only_on_the_completion_day_of_the_week(client, test_engine):
+    task_id = insert_task(
+        test_engine,
+        due_date=date(2026, 10, 30),
+        completed=True,
+        completed_at=datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert week_ids(week_tasks(client, "2026-10-28")) == {"2026-10-28": [task_id]}
+
+
+# Às 22h30 de domingo em Brasília, já é segunda-feira em UTC. A tarefa precisa ficar no
+# domingo, então ela é da semana que termina em 01/11, não da que começa em 02/11.
+def test_task_completed_at_2230_on_sunday_stays_in_that_week(client, test_engine):
+    task_id = insert_task(
+        test_engine,
+        due_date=date(2026, 11, 5),
+        completed=True,
+        completed_at=datetime(2026, 11, 2, 1, 30, tzinfo=timezone.utc),
+    )
+
+    assert week_ids(week_tasks(client, "2026-11-01")) == {"2026-11-01": [task_id]}
+    assert week_ids(week_tasks(client, "2026-11-02")) == {}
+
+
+# Hoje é 01/11, na mesma semana de 30/10, então a tarefa poderia aparecer nas duas colunas.
+def test_overdue_task_appears_on_its_due_date_not_on_today(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 30))
+
+    assert week_ids(week_tasks(client, "2026-11-01")) == {"2026-10-30": [task_id]}
+
+
+# Pela ordem de id, viria [1, 2, 3]. Com as pendentes antes das concluídas, viria [1, 3, 2].
+# Só o created_at explica [2, 1, 3].
+def test_week_day_mixes_pending_and_completed_by_created_at(client, test_engine):
+    insert_task(test_engine, id=1, created_at=datetime(2026, 2, 1, tzinfo=timezone.utc))
+    insert_task(
+        test_engine,
+        id=2,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        completed=True,
+        completed_at=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    insert_task(test_engine, id=3, created_at=datetime(2026, 3, 1, tzinfo=timezone.utc))
+
+    assert week_ids(week_tasks(client, "2026-11-01")) == {"2026-11-01": [2, 1, 3]}
+
+
+# No SQLite, o empate já sai em ordem de id mesmo sem o desempate no ORDER BY. Este teste
+# documenta o resultado esperado, mas não detecta a remoção do desempate.
+def test_week_day_breaks_created_at_tie_by_id(client, test_engine):
+    created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    insert_task(
+        test_engine,
+        id=2,
+        created_at=created_at,
+        completed=True,
+        completed_at=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    insert_task(test_engine, id=1, created_at=created_at)
+
+    assert week_ids(week_tasks(client, "2026-11-01")) == {"2026-11-01": [1, 2]}
+
+
+# 9999-12-31 é uma sexta-feira, então a semana dela tem só os 5 dias que existem.
+def test_last_week_has_five_days_and_lists_its_tasks(client, test_engine):
+    pending_task = create_task(client, due_date="9999-12-31")
+    completed_id = insert_task(
+        test_engine,
+        completed=True,
+        completed_at=datetime(9999, 12, 31, 12, 0, tzinfo=timezone.utc),
+    )
+
+    week = week_tasks(client, "9999-12-31")
+
+    assert [week_day["day"] for week_day in week] == [
+        "9999-12-27",
+        "9999-12-28",
+        "9999-12-29",
+        "9999-12-30",
+        "9999-12-31",
+    ]
+    assert week_ids(week) == {"9999-12-31": [pending_task["id"], completed_id]}
+
+
+def test_first_week_does_not_become_error_500(client):
+    week = week_tasks(client, "0001-01-01")
+
+    assert len(week) == 7
+    assert week[0]["day"] == "0001-01-01"
+
+
+@pytest.mark.parametrize("day", ["2026-13-01", "abc"])
+def test_week_refuses_invalid_date(client, day):
+    response = client.get(f"/tasks/week/{day}")
 
     assert response.status_code == 422
