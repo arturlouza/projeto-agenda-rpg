@@ -56,10 +56,34 @@ def create_task(client, **changes):
     return response.json()
 
 
-# Lê as tarefas direto no banco, porque ainda não existe rota de listagem.
+# Lê todas as tarefas direto no banco, porque a rota de listagem só mostra um dia por vez.
 def tasks_in_database(test_engine):
     with Session(test_engine) as session:
         return list(session.exec(select(Task)).all())
+
+
+# Grava uma tarefa direto no banco e devolve o id dela, porque a API ainda não cria tarefa
+# concluída nem atrasada, e não deixa escolher o id nem o created_at.
+def insert_task(test_engine, **fields):
+    data = {"title": "Tarefa", "due_date": date(2026, 11, 1), "difficulty": "easy"} | fields
+
+    with Session(test_engine) as session:
+        task = Task(**data)
+        session.add(task)
+        session.commit()
+        return task.id
+
+
+# Pede os grupos de um dia pela API, confere que deu certo e devolve o JSON da resposta.
+def day_tasks(client, day):
+    response = client.get(f"/tasks/day/{day}")
+    assert response.status_code == 200
+    return response.json()
+
+
+# Devolve só os ids de um grupo, na ordem em que a API respondeu.
+def ids(tasks):
+    return [task["id"] for task in tasks]
 
 
 # Confere que o pedido foi recusado com 422 e que nada foi gravado.
@@ -261,3 +285,218 @@ def test_today_follows_brasilia_not_utc(client, test_engine, monkeypatch):
 )
 def test_create_refuses_unknown_field(client, test_engine, extra_field):
     assert_refused(client, test_engine, task_data(**extra_field))
+
+
+def test_day_without_tasks_returns_three_empty_lists(client):
+    assert day_tasks(client, "2026-11-01") == {"overdue": [], "pending": [], "completed": []}
+
+
+def test_task_created_by_the_api_appears_only_on_its_day(client):
+    task = create_task(client, due_date="2026-11-05")
+
+    assert day_tasks(client, "2026-11-05") == {"overdue": [], "pending": [task], "completed": []}
+    assert day_tasks(client, "2026-11-04")["pending"] == []
+    assert day_tasks(client, "2026-11-06")["pending"] == []
+
+
+# O exemplo da seção 6.4: concluída às 22h30 de 31/10 em Brasília, gravada como 01h30 UTC.
+# A data marcada é outra, para provar que o dia vem do completed_at, não do due_date.
+def test_task_completed_at_2230_appears_on_the_brasilia_day(client, test_engine):
+    task_id = insert_task(
+        test_engine,
+        due_date=date(2026, 11, 5),
+        completed=True,
+        completed_at=datetime(2026, 11, 1, 1, 30, tzinfo=timezone.utc),
+    )
+
+    completed = day_tasks(client, "2026-10-31")["completed"]
+
+    assert ids(completed) == [task_id]
+    assert completed[0]["completed_at"] == "2026-11-01T01:30:00Z"
+    assert day_tasks(client, "2026-11-01")["completed"] == []
+    assert day_tasks(client, "2026-11-05") == {"overdue": [], "pending": [], "completed": []}
+
+
+# Cada linha é um caso: a hora da conclusão em UTC, o dia em que ela aparece e o dia em que
+# ela não aparece. A meia-noite de Brasília é às 03h00 UTC e já pertence ao dia novo.
+@pytest.mark.parametrize(
+    "completed_at, right_day, wrong_day",
+    [
+        (
+            datetime(2026, 11, 1, 2, 59, 59, 999999, tzinfo=timezone.utc),
+            "2026-10-31",
+            "2026-11-01",
+        ),
+        (datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc), "2026-11-01", "2026-10-31"),
+    ],
+)
+def test_completed_task_at_the_limits_of_the_day(
+    client, test_engine, completed_at, right_day, wrong_day
+):
+    task_id = insert_task(test_engine, completed=True, completed_at=completed_at)
+
+    assert ids(day_tasks(client, right_day)["completed"]) == [task_id]
+    assert day_tasks(client, wrong_day)["completed"] == []
+
+
+def test_completed_task_due_today_is_not_pending(client, test_engine):
+    task_id = insert_task(
+        test_engine,
+        completed=True,
+        completed_at=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+    )
+
+    tasks = day_tasks(client, "2026-11-01")
+
+    assert tasks["pending"] == []
+    assert ids(tasks["completed"]) == [task_id]
+
+
+# Em dia passado, a tarefa fica em pendentes, porque aquele é o dia marcado dela (seção 6.2).
+def test_overdue_task_is_highlighted_only_in_the_today_view(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 30))
+
+    today = day_tasks(client, "2026-11-01")
+    due_day = day_tasks(client, "2026-10-30")
+
+    assert ids(today["overdue"]) == [task_id]
+    assert today["pending"] == []
+    assert due_day["overdue"] == []
+    assert ids(due_day["pending"]) == [task_id]
+    assert day_tasks(client, "2026-10-31") == {"overdue": [], "pending": [], "completed": []}
+    assert day_tasks(client, "2026-11-02") == {"overdue": [], "pending": [], "completed": []}
+
+
+def test_completed_task_is_never_overdue(client, test_engine):
+    insert_task(
+        test_engine,
+        due_date=date(2026, 10, 30),
+        completed=True,
+        completed_at=datetime(2026, 10, 31, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert day_tasks(client, "2026-11-01")["overdue"] == []
+
+
+# Às 01h30 UTC de 01/11 ainda é 31/10 em Brasília, então a visão de hoje é a de 31/10.
+def test_overdue_view_follows_brasilia_today(client, test_engine, monkeypatch):
+    fixed_now = datetime(2026, 11, 1, 1, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr("app.dates.utc_now", lambda: fixed_now)
+    overdue_id = insert_task(test_engine, due_date=date(2026, 10, 30))
+    today_id = insert_task(test_engine, due_date=date(2026, 10, 31))
+
+    today = day_tasks(client, "2026-10-31")
+
+    assert ids(today["overdue"]) == [overdue_id]
+    assert ids(today["pending"]) == [today_id]
+    assert day_tasks(client, "2026-11-01")["overdue"] == []
+
+
+# Seção 4.2: a tarefa travada só fica nas atrasadas se estiver mesmo atrasada.
+def test_locked_task_with_future_date_stays_on_its_day(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 5), postponements=3)
+
+    assert day_tasks(client, "2026-11-01")["overdue"] == []
+    assert ids(day_tasks(client, "2026-11-05")["pending"]) == [task_id]
+
+
+def test_locked_task_that_is_late_is_overdue(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 30), postponements=3)
+
+    assert ids(day_tasks(client, "2026-11-01")["overdue"]) == [task_id]
+
+
+# A mais antiga foi criada depois, então só a data explica ela vir primeiro.
+def test_overdue_orders_by_due_date_before_created_at(client, test_engine):
+    insert_task(
+        test_engine,
+        id=1,
+        due_date=date(2026, 10, 30),
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    insert_task(
+        test_engine,
+        id=2,
+        due_date=date(2026, 10, 29),
+        created_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
+
+    assert ids(day_tasks(client, "2026-11-01")["overdue"]) == [2, 1]
+
+
+# Cada linha é um grupo da visão de 01/11/2026 e o que uma tarefa precisa ter para cair nele.
+DAY_GROUPS = [
+    ("overdue", {"due_date": date(2026, 10, 30)}),
+    ("pending", {"due_date": date(2026, 11, 1)}),
+    (
+        "completed",
+        {"completed": True, "completed_at": datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)},
+    ),
+]
+
+
+# O id maior é o mais antigo, então só o created_at explica ele vir primeiro.
+@pytest.mark.parametrize("group, fields", DAY_GROUPS)
+def test_day_groups_order_by_created_at_not_by_id(client, test_engine, group, fields):
+    insert_task(test_engine, id=1, created_at=datetime(2026, 2, 1, tzinfo=timezone.utc), **fields)
+    insert_task(test_engine, id=2, created_at=datetime(2026, 1, 1, tzinfo=timezone.utc), **fields)
+
+    assert ids(day_tasks(client, "2026-11-01")[group]) == [2, 1]
+
+
+# No SQLite, o empate já sai em ordem de id mesmo sem o desempate no ORDER BY. Este teste
+# documenta o resultado esperado, mas não detecta a remoção do desempate.
+@pytest.mark.parametrize("group, fields", DAY_GROUPS)
+def test_day_groups_break_created_at_tie_by_id(client, test_engine, group, fields):
+    created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    insert_task(test_engine, id=2, created_at=created_at, **fields)
+    insert_task(test_engine, id=1, created_at=created_at, **fields)
+
+    assert ids(day_tasks(client, "2026-11-01")[group]) == [1, 2]
+
+
+# A primeira criada foi concluída por último e tem o id maior, então só a ordem de criação
+# explica ela vir primeiro.
+def test_completed_orders_by_created_at_not_by_completed_at(client, test_engine):
+    insert_task(
+        test_engine,
+        id=2,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        completed=True,
+        completed_at=datetime(2026, 11, 1, 15, 0, tzinfo=timezone.utc),
+    )
+    insert_task(
+        test_engine,
+        id=1,
+        created_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        completed=True,
+        completed_at=datetime(2026, 11, 1, 14, 0, tzinfo=timezone.utc),
+    )
+
+    assert ids(day_tasks(client, "2026-11-01")["completed"]) == [2, 1]
+
+
+@pytest.mark.parametrize("day", ["9999-12-31", "0001-01-01"])
+def test_extreme_dates_do_not_become_error_500(client, day):
+    assert day_tasks(client, day) == {"overdue": [], "pending": [], "completed": []}
+
+
+def test_last_date_lists_pending_and_completed_tasks(client, test_engine):
+    pending_task = create_task(client, due_date="9999-12-31")
+    completed_id = insert_task(
+        test_engine,
+        completed=True,
+        completed_at=datetime(9999, 12, 31, 12, 0, tzinfo=timezone.utc),
+    )
+
+    tasks = day_tasks(client, "9999-12-31")
+
+    assert ids(tasks["pending"]) == [pending_task["id"]]
+    assert ids(tasks["completed"]) == [completed_id]
+
+
+@pytest.mark.parametrize("day", ["2026-13-01", "abc"])
+def test_day_refuses_invalid_date(client, day):
+    response = client.get(f"/tasks/day/{day}")
+
+    assert response.status_code == 422

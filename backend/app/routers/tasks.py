@@ -3,9 +3,9 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import ConfigDict, StringConstraints, field_validator
-from sqlmodel import Session, SQLModel
+from sqlmodel import Session, SQLModel, select
 
-from app.dates import app_today
+from app.dates import app_day_bounds, app_today
 from app.models import DEFAULT_TASK_COLOR, Task, TaskType
 from app.routers.task_types import MAX_ID, SessionDep
 
@@ -50,6 +50,13 @@ class TaskInput(SQLModel):
         return notes or None
 
 
+# O que a API devolve ao listar um dia: os três grupos da visão do dia (seção 6.2).
+class DayTasks(SQLModel):
+    overdue: list[Task]
+    pending: list[Task]
+    completed: list[Task]
+
+
 # Responde 422 se o tipo não existir. O intervalo é conferido antes de consultar o banco,
 # porque um id gigante daria erro ao chegar lá, e o pedido viraria um erro 500.
 def ensure_task_type_exists(session: Session, task_type_id: int) -> None:
@@ -81,3 +88,36 @@ def create_task(task_input: TaskInput, session: SessionDep) -> Task:
     session.commit()
     session.refresh(task)
     return task
+
+
+# A pendente aparece no dia marcado; a concluída, no dia em que foi concluída em Brasília.
+# As atrasadas só vêm na visão de hoje. Nos filtros, "== False" é de propósito: o SQLModel
+# transforma essa comparação em SQL, e "not Task.completed" não seria transformado.
+@router.get("/day/{day}")
+def list_tasks_by_day(day: date, session: SessionDep) -> DayTasks:
+    overdue = []
+    if day == app_today():
+        overdue = session.exec(
+            select(Task)
+            .where(Task.completed == False, Task.due_date < day)
+            .order_by(Task.due_date, Task.created_at, Task.id)
+        ).all()
+
+    pending = session.exec(
+        select(Task)
+        .where(Task.completed == False, Task.due_date == day)
+        .order_by(Task.created_at, Task.id)
+    ).all()
+
+    day_start, day_end = app_day_bounds(day)
+    completed = session.exec(
+        select(Task)
+        .where(
+            Task.completed == True,
+            Task.completed_at >= day_start,
+            Task.completed_at < day_end,
+        )
+        .order_by(Task.created_at, Task.id)
+    ).all()
+
+    return DayTasks(overdue=overdue, pending=pending, completed=completed)
