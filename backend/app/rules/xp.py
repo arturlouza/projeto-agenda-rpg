@@ -1,9 +1,11 @@
 import math
+from datetime import date
 
 # XP de cada dificuldade de tarefa, concluída sem nenhum adiamento.
 TASK_BASE_XP = {"easy": 10, "medium": 25, "hard": 50}
 
 # Cada adiamento tira 25% do XP. Acima de 3 adiamentos, a tarefa vale 0.
+# Com 3 ou mais adiamentos efetivos, a data trava.
 POSTPONEMENT_PENALTY = 0.25
 MAX_POSTPONEMENTS = 3
 
@@ -22,14 +24,35 @@ LEVEL_GROWTH_CAP = 100
 #   e o total de 86.928 XP até o nível 100 dependem dele.
 
 
+# Soma os adiamentos manuais e os dias de atraso. Data no futuro não desconta adiamento.
+def effective_postponements(manual_postponements: int, days_late: int) -> int:
+    return manual_postponements + max(days_late, 0)
+
+
+# Com 3 ou mais adiamentos efetivos, a data não pode mais ser mudada.
+def is_due_date_locked(manual_postponements: int, days_late: int) -> bool:
+    return effective_postponements(manual_postponements, days_late) >= MAX_POSTPONEMENTS
+
+
+# Calcula o contador depois de mudar a data. Só mudar para depois conta como adiamento.
+# Esta função não confere a trava: quem a chama precisa conferir antes.
+def postponements_after_date_change(
+    manual_postponements: int, days_late: int, current_due_date: date, new_due_date: date
+) -> int:
+    if new_due_date <= current_due_date:
+        return manual_postponements
+
+    return effective_postponements(manual_postponements, days_late) + 1
+
+
 # Calcula o XP de uma tarefa, descontando os adiamentos manuais e os dias de atraso.
 def task_xp(difficulty: str, manual_postponements: int, days_late: int) -> int:
-    effective_postponements = manual_postponements + days_late
+    effective = effective_postponements(manual_postponements, days_late)
 
-    if effective_postponements > MAX_POSTPONEMENTS:
+    if effective > MAX_POSTPONEMENTS:
         return 0
 
-    multiplier = 1 - POSTPONEMENT_PENALTY * effective_postponements
+    multiplier = 1 - POSTPONEMENT_PENALTY * effective
     return math.floor(TASK_BASE_XP[difficulty] * multiplier)
 
 
