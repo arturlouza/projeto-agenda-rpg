@@ -151,7 +151,7 @@ TaskType (tipo de tarefa)
 Task (tarefa)
   id, title, notes (opcional), due_date (data),
   difficulty ("easy" | "medium" | "hard"),
-  color (cor em hexadecimal, com um padrão),
+  color (cor em hexadecimal, padrão #F5E6C8),
   task_type_id (opcional),
   completed (verdadeiro/falso), completed_at (opcional),
   postponements (0 a 3), created_at
@@ -173,7 +173,7 @@ O nível e o XP do jogador não são tabelas: são calculados a partir do `XpEnt
 ### 6.3 Aparência
 
 - A cor escolhida pelo usuário é o **fundo do cartão**.
-- A dificuldade aparece na **moldura e num ícone**, sem mexer na cor. Tarefas: fácil com moldura simples, médio com moldura prateada, difícil com moldura dourada. Missões (V2) seguem a escada bronze, prata, ouro, rubi, brilho roxo (semideus) e um efeito animado discreto (deus).
+- A dificuldade aparece na **moldura e num ícone**, sem mexer na cor. Tarefas: fácil com moldura simples, médio com moldura prateada, difícil com moldura dourada, em um tom de ouro mais escuro, para manter o contraste com o fundo pergaminho padrão (#F5E6C8). Missões (V2) seguem a escada bronze, prata, ouro, rubi, brilho roxo (semideus) e um efeito animado discreto (deus).
 - Regra geral: nada pode confundir a vista. Efeitos sutis, nunca piscando.
 
 ## 7. Versão 2 em detalhe: tarefas repetidas

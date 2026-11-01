@@ -22,6 +22,11 @@ Sou dev júnior, em transição de carreira, aprendendo Python e desenvolvimento
 8. **Na dúvida, pergunte.** Se a especificação estiver ambígua ou incompleta, pergunte em vez de inventar uma regra.
 9. **Regras do jogo num lugar só.** Toda regra de XP e nível fica em `backend/app/rules/xp.py`, com os números como constantes no topo do arquivo. Toda regra nova ganha teste no pytest.
 10. **Aprendo revisando.** Você escreve o código; eu leio e reviso cada alteração. Quando eu perguntar sobre um trecho, explique linha por linha, com calma, sem pressupor que eu já sei o conceito.
+11. **Regras não podem prejudicar o projeto.** Se seguir qualquer regra deste arquivo ou da especificação puder causar um problema (bug, comportamento diferente entre desenvolvimento e produção, falha de segurança, código frágil), não siga a regra às cegas nem a quebre em silêncio. Pare, explique o risco, proponha a alternativa e espere a minha decisão. Toda exceção aprovada fica registrada neste arquivo, com o motivo.
+
+## Exceções aprovadas
+
+- **`PRAGMA foreign_keys=ON` em `backend/app/database.py`:** é a única exceção à regra de nunca escrever SQL à mão. O SQLite não confere chaves estrangeiras por padrão e o PostgreSQL confere, então sem esse comando o desenvolvimento se comportaria diferente da produção. O comando só roda quando o banco é SQLite.
 
 ## Stack
 
