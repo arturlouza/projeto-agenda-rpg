@@ -1,22 +1,37 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 from pydantic import StringConstraints
 from sqlmodel import Session, SQLModel, select
 
 from app.database import get_session
 from app.models import Task, TaskType
 
+# Tamanho máximo do nome de um tipo, contado depois de remover os espaços das pontas.
+MAX_TASK_TYPE_NAME_LENGTH = 50
+
+# Maior valor da coluna INTEGER do PostgreSQL. Com este limite, um id gigante é recusado
+# do mesmo jeito nos dois bancos, em vez de causar um erro 500 ao chegar ao banco.
+MAX_ID = 2_147_483_647
+
 router = APIRouter(prefix="/task-types", tags=["task-types"])
 
 # Pede ao FastAPI uma sessão do banco para a rota que declarar este tipo.
 SessionDep = Annotated[Session, Depends(get_session)]
 
+# Id que vem na rota. Fora deste intervalo, o FastAPI responde 422 sem consultar o banco.
+TaskTypeId = Annotated[int, Path(ge=1, le=MAX_ID)]
 
-# O que a API recebe ao criar ou renomear. Tira os espaços das pontas e recusa nome vazio.
-# É separada de TaskType porque modelos com table=True não validam os dados.
+
+# O que a API recebe ao criar ou renomear. Tira os espaços das pontas e recusa nome vazio
+# ou longo demais. É separada de TaskType porque modelos com table=True não validam os dados.
 class TaskTypeInput(SQLModel):
-    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    name: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True, min_length=1, max_length=MAX_TASK_TYPE_NAME_LENGTH
+        ),
+    ]
 
 
 # Diz se outro tipo já usa este nome, ignorando maiúsculas e minúsculas. A comparação é no
@@ -67,7 +82,7 @@ def list_task_types(session: SessionDep) -> list[TaskType]:
     },
 )
 def rename_task_type(
-    task_type_id: int, task_type_input: TaskTypeInput, session: SessionDep
+    task_type_id: TaskTypeId, task_type_input: TaskTypeInput, session: SessionDep
 ) -> TaskType:
     task_type = get_task_type_or_404(session, task_type_id)
 
@@ -88,7 +103,7 @@ def rename_task_type(
     status_code=status.HTTP_204_NO_CONTENT,
     responses={404: {"description": "Tipo de tarefa não encontrado."}},
 )
-def delete_task_type(task_type_id: int, session: SessionDep) -> None:
+def delete_task_type(task_type_id: TaskTypeId, session: SessionDep) -> None:
     task_type = get_task_type_or_404(session, task_type_id)
 
     for task in session.exec(select(Task).where(Task.task_type_id == task_type_id)).all():

@@ -68,6 +68,22 @@ def test_create_refuses_empty_name(client, name):
     assert response.status_code == 422
 
 
+# Os espaços das pontas saem antes da contagem, então os dois nomes têm 50 caracteres.
+@pytest.mark.parametrize("name", ["a" * 50, "  " + "a" * 50 + "  "])
+def test_create_accepts_name_with_50_characters(client, name):
+    response = client.post("/task-types", json={"name": name})
+
+    assert response.status_code == 201
+    assert response.json()["name"] == "a" * 50
+
+
+def test_create_refuses_name_with_51_characters(client):
+    response = client.post("/task-types", json={"name": "a" * 51})
+
+    assert response.status_code == 422
+    assert client.get("/task-types").json() == []
+
+
 @pytest.mark.parametrize(
     ("existing", "repeated"),
     [
@@ -133,8 +149,30 @@ def test_rename_refuses_empty_name(client, name):
     assert client.get("/task-types").json()[0]["name"] == "Leitura"
 
 
+def test_rename_refuses_name_with_51_characters(client):
+    task_type_id = create_type(client, "Leitura")
+
+    response = client.patch(f"/task-types/{task_type_id}", json={"name": "a" * 51})
+
+    assert response.status_code == 422
+    assert client.get("/task-types").json()[0]["name"] == "Leitura"
+
+
 def test_rename_unknown_type_returns_404(client):
     response = client.patch("/task-types/999", json={"name": "Estudo"})
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize("task_type_id", [0, -1, 2147483648, 10**30])
+def test_rename_refuses_id_out_of_range(client, task_type_id):
+    response = client.patch(f"/task-types/{task_type_id}", json={"name": "Estudo"})
+
+    assert response.status_code == 422
+
+
+def test_rename_with_largest_id_returns_404(client):
+    response = client.patch("/task-types/2147483647", json={"name": "Estudo"})
 
     assert response.status_code == 404
 
@@ -150,6 +188,19 @@ def test_delete_removes_unused_type(client):
 
 def test_delete_unknown_type_returns_404(client):
     response = client.delete("/task-types/999")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize("task_type_id", [0, -1, 2147483648, 10**30])
+def test_delete_refuses_id_out_of_range(client, task_type_id):
+    response = client.delete(f"/task-types/{task_type_id}")
+
+    assert response.status_code == 422
+
+
+def test_delete_with_largest_id_returns_404(client):
+    response = client.delete("/task-types/2147483647")
 
     assert response.status_code == 404
 

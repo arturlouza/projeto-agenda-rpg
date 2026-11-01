@@ -169,6 +169,7 @@ O nível e o XP do jogador não são tabelas: são calculados a partir do `XpEnt
 
 - Não pode haver dois tipos com o mesmo nome, ignorando maiúsculas e minúsculas: "Leitura" e "LEITURA" são o mesmo nome. Acentos contam: "Música" e "Musica" são nomes diferentes.
 - Nome vazio é recusado. Espaços no começo e no fim são removidos, então um nome só com espaços também conta como vazio.
+- O nome tem no máximo 50 caracteres, contados depois de remover os espaços do começo e do fim.
 - Ao excluir um tipo usado por tarefas, as tarefas ficam sem tipo; nenhuma tarefa é apagada.
 
 ### 6.2 Telas
