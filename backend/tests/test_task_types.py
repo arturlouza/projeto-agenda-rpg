@@ -1,0 +1,187 @@
+from datetime import date
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlmodel import Session, SQLModel, create_engine
+
+from app.database import get_session
+from app.main import app
+from app.models import Task
+
+
+# Banco em arquivo na pasta temporária do pytest, para nunca tocar no agenda.db real.
+@pytest.fixture
+def test_engine(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path}/test.db")
+    SQLModel.metadata.create_all(engine)
+    yield engine
+    engine.dispose()
+
+
+# Cliente da API que usa o banco de teste no lugar do banco real.
+@pytest.fixture
+def client(test_engine):
+    def get_test_session():
+        with Session(test_engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = get_test_session
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+# Cria um tipo pela API e devolve o id dele.
+def create_type(client, name):
+    response = client.post("/task-types", json={"name": name})
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def test_create_returns_the_new_type(client):
+    response = client.post("/task-types", json={"name": "Leitura"})
+
+    assert response.status_code == 201
+    assert response.json()["name"] == "Leitura"
+    assert response.json()["id"] is not None
+
+
+def test_list_returns_types_in_creation_order(client):
+    create_type(client, "Treino")
+    create_type(client, "Estudo")
+
+    response = client.get("/task-types")
+
+    assert response.status_code == 200
+    assert [task_type["name"] for task_type in response.json()] == ["Treino", "Estudo"]
+
+
+def test_create_removes_spaces_from_the_ends(client):
+    response = client.post("/task-types", json={"name": "  Leitura  "})
+
+    assert response.json()["name"] == "Leitura"
+
+
+@pytest.mark.parametrize("name", ["", "   "])
+def test_create_refuses_empty_name(client, name):
+    response = client.post("/task-types", json={"name": name})
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("existing", "repeated"),
+    [
+        ("Leitura", "Leitura"),
+        ("Leitura", "LEITURA"),
+        ("MÚSICA", "música"),
+        ("Leitura", "  leitura  "),
+    ],
+)
+def test_create_refuses_repeated_name(client, existing, repeated):
+    create_type(client, existing)
+
+    response = client.post("/task-types", json={"name": repeated})
+
+    assert response.status_code == 409
+    assert len(client.get("/task-types").json()) == 1
+
+
+def test_names_that_differ_only_by_accent_can_coexist(client):
+    create_type(client, "Música")
+
+    response = client.post("/task-types", json={"name": "Musica"})
+
+    assert response.status_code == 201
+
+
+def test_rename_changes_the_name(client):
+    task_type_id = create_type(client, "Leitura")
+
+    response = client.patch(f"/task-types/{task_type_id}", json={"name": "Estudo"})
+
+    assert response.status_code == 200
+    assert response.json() == {"id": task_type_id, "name": "Estudo"}
+    assert client.get("/task-types").json() == [{"id": task_type_id, "name": "Estudo"}]
+
+
+def test_rename_can_change_only_the_case_of_its_own_name(client):
+    task_type_id = create_type(client, "leitura")
+
+    response = client.patch(f"/task-types/{task_type_id}", json={"name": "Leitura"})
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Leitura"
+
+
+def test_rename_refuses_name_of_another_type(client):
+    create_type(client, "Leitura")
+    task_type_id = create_type(client, "Treino")
+
+    response = client.patch(f"/task-types/{task_type_id}", json={"name": "LEITURA"})
+
+    assert response.status_code == 409
+    assert client.get("/task-types").json()[1]["name"] == "Treino"
+
+
+@pytest.mark.parametrize("name", ["", "   "])
+def test_rename_refuses_empty_name(client, name):
+    task_type_id = create_type(client, "Leitura")
+
+    response = client.patch(f"/task-types/{task_type_id}", json={"name": name})
+
+    assert response.status_code == 422
+    assert client.get("/task-types").json()[0]["name"] == "Leitura"
+
+
+def test_rename_unknown_type_returns_404(client):
+    response = client.patch("/task-types/999", json={"name": "Estudo"})
+
+    assert response.status_code == 404
+
+
+def test_delete_removes_unused_type(client):
+    task_type_id = create_type(client, "Leitura")
+
+    response = client.delete(f"/task-types/{task_type_id}")
+
+    assert response.status_code == 204
+    assert client.get("/task-types").json() == []
+
+
+def test_delete_unknown_type_returns_404(client):
+    response = client.delete("/task-types/999")
+
+    assert response.status_code == 404
+
+
+def test_delete_used_type_keeps_tasks_without_type(client, test_engine):
+    task_type_id = create_type(client, "Treino")
+    other_type_id = create_type(client, "Leitura")
+
+    with Session(test_engine) as session:
+        used_task = Task(
+            title="Corrida",
+            due_date=date(2026, 1, 1),
+            difficulty="easy",
+            task_type_id=task_type_id,
+        )
+        other_task = Task(
+            title="Ler 30 páginas",
+            due_date=date(2026, 1, 1),
+            difficulty="medium",
+            task_type_id=other_type_id,
+        )
+        session.add(used_task)
+        session.add(other_task)
+        session.commit()
+        used_task_id = used_task.id
+        other_task_id = other_task.id
+
+    response = client.delete(f"/task-types/{task_type_id}")
+
+    assert response.status_code == 204
+    assert [task_type["id"] for task_type in client.get("/task-types").json()] == [other_type_id]
+
+    with Session(test_engine) as session:
+        assert session.get(Task, used_task_id).task_type_id is None
+        assert session.get(Task, other_task_id).task_type_id == other_type_id

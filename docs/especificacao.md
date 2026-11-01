@@ -59,6 +59,7 @@ Todos os números ficam como constantes no topo de `backend/app/rules/xp.py`, pa
 ### 4.2 Atraso e adiamento
 
 - Concluir no dia marcado vale 100% do XP.
+- Concluir antes do dia marcado também vale 100%: os dias de atraso nunca são negativos. A função `task_xp`, em `backend/app/rules/xp.py`, trata atraso negativo como 0, com teste na tarefa 5.
 - Cada adiamento tira 25%: 1 adiamento vale 75%, 2 valem 50% e 3 valem 25%.
 - Um adiamento acontece de duas formas: quando você muda a data da tarefa para depois, ou quando o dia passa sem ela ser concluída (cada dia de atraso conta como um adiamento).
 - Depois de 3 adiamentos, a tarefa **perde o XP**: ainda dá para concluí-la, mas ela vale 0. O botão "Adiar" fica bloqueado.
@@ -69,6 +70,8 @@ Em código: `adiamentos_efetivos = adiamentos_manuais + dias_de_atraso`. Se for 
 ### 4.3 Desmarcar
 
 Desmarcar uma tarefa concluída devolve exatamente o XP que ela deu. Assim não dá para "farmar" XP marcando e desmarcando.
+
+Excluir uma tarefa concluída mantém no histórico o XP que ela deu. Para remover esse XP, é preciso desmarcar a tarefa antes de excluir.
 
 ### 4.4 Histórico de XP
 
@@ -162,19 +165,40 @@ XpEntry (histórico de XP)
 
 O nível e o XP do jogador não são tabelas: são calculados a partir do `XpEntry`.
 
+**Regras dos tipos de tarefa:**
+
+- Não pode haver dois tipos com o mesmo nome, ignorando maiúsculas e minúsculas: "Leitura" e "LEITURA" são o mesmo nome. Acentos contam: "Música" e "Musica" são nomes diferentes.
+- Nome vazio é recusado. Espaços no começo e no fim são removidos, então um nome só com espaços também conta como vazio.
+- Ao excluir um tipo usado por tarefas, as tarefas ficam sem tipo; nenhuma tarefa é apagada.
+
 ### 6.2 Telas
 
 - **Topo fixo:** nível atual e barra de XP (quanto falta para o próximo nível).
-- **Dia:** lista das tarefas da data escolhida, no estilo Google Tarefas. As tarefas atrasadas aparecem em destaque no topo.
-- **Semana:** sete colunas, de segunda a domingo, com as tarefas de cada dia, e setas para navegar entre semanas. É a visão ampla que falta no Google Tarefas.
-- **Criar/editar tarefa:** título, data, dificuldade, cor, tipo e notas.
+- **Dia:** lista das tarefas da data escolhida, no estilo Google Tarefas. Na visão de hoje, as tarefas pendentes atrasadas aparecem em destaque no topo. Nas outras datas, uma tarefa pendente aparece no dia marcado. As tarefas concluídas vão para uma seção "Concluídas" no fim do dia, que pode ser aberta e fechada. Toda tarefa concluída aparece em "Concluídas" no dia em que foi concluída, no horário de Brasília, não no dia marcado.
+- **Semana:** sete colunas, de segunda a domingo, com as tarefas de cada dia, e setas para navegar entre semanas. É a visão ampla que falta no Google Tarefas. Vale a mesma regra da visão do dia: tarefa pendente aparece no dia marcado; tarefa concluída aparece no dia em que foi concluída, no horário de Brasília.
+- **Notas no dia e na semana:** tarefas que têm notas mostram um ícone.
+- **Toque na tarefa:** tocar na tarefa expande o cartão, mostrando as notas (se houver) e os botões Editar e Adiar; tocar de novo recolhe. Numa tarefa sem notas, o toque expande do mesmo jeito, mostrando só os botões. O cartão expandido de uma tarefa concluída não mostra o botão Adiar, só as notas e o Editar. Concluir é pela caixinha de marcar, separada do toque.
+- **Criar/editar tarefa:** título, data, dificuldade, cor, tipo e notas. Excluir fica dentro da tela de edição e sempre pede confirmação antes de apagar.
 - **Ao subir de nível:** uma comemoração curta na tela.
 
 ### 6.3 Aparência
 
 - A cor escolhida pelo usuário é o **fundo do cartão**.
 - A dificuldade aparece na **moldura e num ícone**, sem mexer na cor. Tarefas: fácil com moldura simples, médio com moldura prateada, difícil com moldura dourada, em um tom de ouro mais escuro, para manter o contraste com o fundo pergaminho padrão (#F5E6C8). Missões (V2) seguem a escada bronze, prata, ouro, rubi, brilho roxo (semideus) e um efeito animado discreto (deus).
+- **Tarefa concluída:** fica com a caixinha marcada, o título riscado e o cartão mais transparente, e mostra o XP que rendeu (por exemplo "+25 XP"). Ao concluir, um "+XP" aparece e some numa animação curta.
 - Regra geral: nada pode confundir a vista. Efeitos sutis, nunca piscando.
+
+### 6.4 Fuso horário
+
+O app segue o horário de Brasília. O fuso fica numa constante única: `APP_TIMEZONE = "America/Sao_Paulo"`.
+
+- Datas e horas (`completed_at`, `created_at`) são gravadas em UTC no banco.
+- Tudo que depende de "que dia é" converte para Brasília antes de calcular: o dia de hoje, os dias de atraso, o dia da conclusão e o agrupamento por semana.
+- Nunca tirar o dia de uma data e hora em UTC direto com `.date()`: sempre converter para `APP_TIMEZONE` antes.
+- O SQLite guarda datas e horas sem fuso. O SQLModel já as devolve como UTC; mesmo assim, qualquer data sem fuso que chegue à função auxiliar é tratada como UTC.
+- No PostgreSQL, `completed_at` e `created_at` usam `TIMESTAMP WITH TIME ZONE` (tipo `UTCDateTime` do SQLModel).
+- `due_date` é uma data pura, sem hora, e não passa por conversão de fuso.
+- Exemplo: uma tarefa concluída às 22h30 de 31/10 em Brasília fica gravada como 01h30 de 01/11 em UTC e conta como concluída em 31/10.
 
 ## 7. Versão 2 em detalhe: tarefas repetidas
 
@@ -254,7 +278,7 @@ Uma tarefa por sessão do Claude Code. Cada uma termina com o app funcionando, t
 | 2 | Regras de XP como funções puras em `rules/xp.py`: XP da tarefa (com adiamentos), XP necessário por nível, nível a partir do XP total | Os testes do pytest passam, incluindo os números da tabela 4.5 |
 | 3 | Banco SQLite e modelos `TaskType`, `Task` e `XpEntry` com SQLModel | O banco é criado ao iniciar o app |
 | 4 | API dos tipos de tarefa: criar, listar, renomear, excluir | Funciona pela documentação automática do FastAPI (`/docs`) |
-| 5 | API das tarefas: criar, editar, excluir, listar por dia e por semana | Funciona pelo `/docs` |
+| 5 | Primeiro passo: adicionar `tzdata` ao `requirements.txt` e criar a função auxiliar de datas, com testes (incluindo o caso das 22h30). Também: `task_xp` trata atraso negativo como 0, com teste. Depois, API das tarefas: criar, editar, excluir, listar por dia e por semana | Funciona pelo `/docs` |
 | 6 | Concluir e desmarcar tarefa, gerando e devolvendo XP no histórico | Concluir e desmarcar deixa o XP total igual ao de antes |
 | 7 | Adiar tarefa e calcular o atraso, com bloqueio após 3 adiamentos | Os testes cobrem 0, 1, 2, 3 e 4 adiamentos |
 | 8 | API do jogador: XP total, nível e progresso da barra | `/player` devolve nível e porcentagem corretos |

@@ -1,8 +1,9 @@
 import sqlite3
+from collections.abc import Iterator
 
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
-from sqlmodel import SQLModel, create_engine
+from sqlmodel import Session, SQLModel, create_engine
 
 # Este import parece não ser usado, mas é ele que apresenta as tabelas ao SQLModel.
 # Sem ele, create_all não conhece nenhuma tabela e cria um banco vazio.
@@ -36,3 +37,9 @@ def enable_sqlite_foreign_keys(dbapi_connection: object, connection_record: obje
 # Cria o arquivo do banco e as tabelas que ainda não existem.
 def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(engine)
+
+
+# Abre uma sessão para cada pedido à API e a fecha quando o pedido termina.
+def get_session() -> Iterator[Session]:
+    with Session(engine) as session:
+        yield session
