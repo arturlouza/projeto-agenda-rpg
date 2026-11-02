@@ -1,12 +1,12 @@
 from datetime import date
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Path, status
 from pydantic import ConfigDict, StringConstraints, field_validator
 from sqlmodel import Session, SQLModel, and_, or_, select
 
 from app.dates import app_day_bounds, app_today, week_days
-from app.models import DEFAULT_TASK_COLOR, Task, TaskType
+from app.models import DEFAULT_TASK_COLOR, Task, TaskType, XpEntry
 from app.routers.task_types import MAX_ID, SessionDep
 
 # Tamanhos máximos, contados depois de remover os espaços das pontas.
@@ -20,6 +20,9 @@ TASK_COLOR_PATTERN = r"^#[0-9A-Fa-f]{6}$"
 Difficulty = Literal["easy", "medium", "hard"]
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+# Id que vem na rota. Fora deste intervalo, o FastAPI responde 422 sem consultar o banco.
+TaskId = Annotated[int, Path(ge=1, le=MAX_ID)]
 
 
 # O que a API recebe ao criar uma tarefa. É separada de Task porque modelos com table=True
@@ -150,3 +153,27 @@ def list_tasks_by_week(day: date, session: SessionDep) -> list[WeekDay]:
         week.append(WeekDay(day=week_day, tasks=tasks))
 
     return week
+
+
+# O XP já ganho continua no histórico: as linhas da tarefa só perdem o vínculo com ela (seção
+# 4.3). Tudo vale só no commit, numa única transação: se algo falhar no meio, nada muda no banco.
+@router.delete(
+    "/{task_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={404: {"description": "Tarefa não encontrada."}},
+)
+def delete_task(task_id: TaskId, session: SessionDep) -> None:
+    task = session.get(Task, task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Tarefa não encontrada.")
+
+    for entry in session.exec(select(XpEntry).where(XpEntry.task_id == task_id)).all():
+        entry.task_id = None
+        session.add(entry)
+
+    # Envia as mudanças do histórico antes de excluir a tarefa, senão a chave estrangeira
+    # poderia recusar a exclusão.
+    session.flush()
+
+    session.delete(task)
+    session.commit()

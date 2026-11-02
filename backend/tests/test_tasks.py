@@ -7,7 +7,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.database import get_session
 from app.main import app
-from app.models import DEFAULT_TASK_COLOR, Task
+from app.models import DEFAULT_TASK_COLOR, Task, XpEntry
 from app.routers.tasks import Difficulty
 from app.rules.xp import TASK_BASE_XP
 
@@ -72,6 +72,19 @@ def insert_task(test_engine, **fields):
         session.add(task)
         session.commit()
         return task.id
+
+
+# Grava uma linha de XP direto no banco, porque gerar XP só chega na tarefa 6.
+def insert_xp_entry(test_engine, amount, reason, task_id):
+    with Session(test_engine) as session:
+        session.add(XpEntry(amount=amount, reason=reason, task_id=task_id))
+        session.commit()
+
+
+# Lê todas as linhas do histórico de XP direto no banco, porque ainda não há rota para isso.
+def xp_entries_in_database(test_engine):
+    with Session(test_engine) as session:
+        return list(session.exec(select(XpEntry)).all())
 
 
 # Pede os grupos de um dia pela API, confere que deu certo e devolve o JSON da resposta.
@@ -659,3 +672,102 @@ def test_week_refuses_invalid_date(client, day):
     response = client.get(f"/tasks/week/{day}")
 
     assert response.status_code == 422
+
+
+def test_delete_removes_the_task(client, test_engine):
+    task = create_task(client)
+
+    response = client.delete(f"/tasks/{task['id']}")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert tasks_in_database(test_engine) == []
+    assert day_tasks(client, task["due_date"])["pending"] == []
+
+
+# Seção 4.2: a tarefa travada só sai da lista se for concluída ou excluída, então nenhum
+# estado impede a exclusão. Cada linha é um estado: pendente, atrasada, travada e concluída.
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"due_date": date(2026, 10, 30)},
+        {"due_date": date(2026, 11, 5), "postponements": 3},
+        {"completed": True, "completed_at": datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)},
+    ],
+)
+def test_delete_accepts_task_in_any_state(client, test_engine, fields):
+    task_id = insert_task(test_engine, **fields)
+
+    response = client.delete(f"/tasks/{task_id}")
+
+    assert response.status_code == 204
+    assert tasks_in_database(test_engine) == []
+
+
+@pytest.mark.parametrize("task_id", [999, 2147483647])
+def test_delete_unknown_task_returns_404(client, test_engine, task_id):
+    insert_task(test_engine, id=1)
+
+    response = client.delete(f"/tasks/{task_id}")
+
+    assert response.status_code == 404
+    assert len(tasks_in_database(test_engine)) == 1
+
+
+@pytest.mark.parametrize("task_id", [0, -1, 2147483648, 10**30])
+def test_delete_refuses_id_out_of_range(client, test_engine, task_id):
+    insert_task(test_engine, id=1)
+
+    response = client.delete(f"/tasks/{task_id}")
+
+    assert response.status_code == 422
+    assert len(tasks_in_database(test_engine)) == 1
+
+
+# Seção 4.3: excluir mantém o XP no histórico. A tarefa tem mais de uma linha, inclusive
+# negativa, como acontece ao concluir, desmarcar e concluir de novo.
+# Este teste não detecta a remoção do flush da rota: sem ele, a ordem das mudanças saiu certa
+# no SQLite, mas nada garante isso, porque os modelos não têm relationship.
+def test_delete_keeps_xp_in_history_without_the_task(client, test_engine):
+    deleted_id = insert_task(
+        test_engine,
+        completed=True,
+        completed_at=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    other_id = insert_task(test_engine)
+    insert_xp_entry(test_engine, 25, "Tarefa concluída", deleted_id)
+    insert_xp_entry(test_engine, -25, "Tarefa desmarcada", deleted_id)
+    insert_xp_entry(test_engine, 18, "Tarefa concluída de novo", deleted_id)
+    insert_xp_entry(test_engine, 10, "Outra tarefa", other_id)
+
+    response = client.delete(f"/tasks/{deleted_id}")
+
+    assert response.status_code == 204
+    entries = xp_entries_in_database(test_engine)
+    assert sum(entry.amount for entry in entries) == 28
+    assert {(entry.amount, entry.reason, entry.task_id) for entry in entries} == {
+        (25, "Tarefa concluída", None),
+        (-25, "Tarefa desmarcada", None),
+        (18, "Tarefa concluída de novo", None),
+        (10, "Outra tarefa", other_id),
+    }
+    assert [task.id for task in tasks_in_database(test_engine)] == [other_id]
+
+
+# O delete falha depois que o task_id do histórico já foi limpo. Se a limpeza tivesse sido
+# gravada num commit separado, a linha perderia o vínculo com uma tarefa que continua existindo.
+def test_failed_delete_changes_nothing(client, test_engine, monkeypatch):
+    task_id = insert_task(test_engine)
+    insert_xp_entry(test_engine, 25, "Tarefa concluída", task_id)
+
+    def fail_delete(session, instance):
+        raise RuntimeError("Falha simulada")
+
+    monkeypatch.setattr(Session, "delete", fail_delete)
+
+    with pytest.raises(RuntimeError):
+        client.delete(f"/tasks/{task_id}")
+
+    assert [task.id for task in tasks_in_database(test_engine)] == [task_id]
+    assert [entry.task_id for entry in xp_entries_in_database(test_engine)] == [task_id]
