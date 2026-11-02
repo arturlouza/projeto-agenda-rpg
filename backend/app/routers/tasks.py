@@ -8,6 +8,7 @@ from sqlmodel import Session, SQLModel, and_, or_, select
 from app.dates import app_day_bounds, app_today, week_days
 from app.models import DEFAULT_TASK_COLOR, Task, TaskType, XpEntry
 from app.routers.task_types import MAX_ID, SessionDep
+from app.rules.xp import is_due_date_locked, postponements_after_date_change
 
 # Tamanhos máximos, contados depois de remover os espaços das pontas.
 MAX_TASK_TITLE_LENGTH = 100
@@ -39,7 +40,9 @@ TaskColor = Annotated[str, StringConstraints(pattern=TASK_COLOR_PATTERN, to_uppe
 # O que a API recebe ao editar uma tarefa. É separada de Task porque modelos com table=True
 # não validam os dados. Nenhum campo tem valor padrão, então todos são obrigatórios: esquecer
 # um campo dá 422, em vez de apagar as notas ou voltar a cor ao padrão. Notas e tipo aceitam
-# null, que é o jeito de remover o valor de propósito.
+# null, que é o jeito de remover o valor de propósito. A data não é conferida aqui porque a
+# regra vale só para data nova, e a edição não pode recusar uma tarefa atrasada por causa da
+# data que não mudou.
 class TaskUpdate(SQLModel):
     # Campo desconhecido é recusado, então o pedido não escolhe postponements nem completed.
     model_config = ConfigDict(extra="forbid")
@@ -49,6 +52,7 @@ class TaskUpdate(SQLModel):
     difficulty: Difficulty
     color: TaskColor
     task_type_id: int | None
+    due_date: date
 
     # Roda depois de tirar os espaços, então notas só com espaços também viram None.
     @field_validator("notes")
@@ -57,11 +61,8 @@ class TaskUpdate(SQLModel):
         return notes or None
 
 
-# O que a API recebe ao criar uma tarefa: as mesmas regras da edição, mais a data e os valores
-# padrão. A data não é conferida aqui porque a regra vale só para data nova, e a edição não
-# pode recusar uma tarefa atrasada por causa da data que não mudou.
+# O que a API recebe ao criar uma tarefa: as mesmas regras da edição, mais os valores padrão.
 class TaskInput(TaskUpdate):
-    due_date: date
     notes: TaskNotes | None = None
     color: TaskColor = DEFAULT_TASK_COLOR
     task_type_id: int | None = None
@@ -97,6 +98,37 @@ def ensure_task_type_exists(session: Session, task_type_id: int) -> None:
         )
 
 
+# Responde 422 se a data for anterior a hoje em Brasília. Vale só para data nova.
+def ensure_date_is_not_past(day: date) -> None:
+    if day < app_today():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, detail="A data não pode ser anterior a hoje."
+        )
+
+
+# Muda a data de uma tarefa, para a edição e para o botão Adiar (tarefa 7). Quem chama já
+# conferiu que a data é outra e que não é anterior a hoje. A trava vem antes do contador,
+# porque postponements_after_date_change não a confere. Os dias de atraso podem sair negativos
+# aqui, com a data no futuro: as regras de xp.py tratam esse valor como 0.
+def change_due_date(task: Task, new_due_date: date) -> None:
+    if task.completed:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail="Desmarque a tarefa antes de mudar a data."
+        )
+
+    days_late = (app_today() - task.due_date).days
+
+    if is_due_date_locked(task.postponements, days_late):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail="A data desta tarefa está travada e não pode mudar."
+        )
+
+    task.postponements = postponements_after_date_change(
+        task.postponements, days_late, task.due_date, new_due_date
+    )
+    task.due_date = new_due_date
+
+
 # Filtro das tarefas pendentes de um dia: a pendente aparece no dia marcado. O "== False" é
 # de propósito: o SQLModel transforma essa comparação em SQL, e "not Task.completed" não
 # seria transformado.
@@ -117,10 +149,7 @@ def completed_on(day: date):
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_task(task_input: TaskInput, session: SessionDep) -> Task:
-    if task_input.due_date < app_today():
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT, detail="A data não pode ser anterior a hoje."
-        )
+    ensure_date_is_not_past(task_input.due_date)
 
     if task_input.task_type_id is not None:
         ensure_task_type_exists(session, task_input.task_type_id)
@@ -177,17 +206,29 @@ def list_tasks_by_week(day: date, session: SessionDep) -> list[WeekDay]:
     return week
 
 
-# O dado é conferido antes do estado da tarefa, então o 422 do tipo vem antes do 409. A tarefa
-# só é alterada depois de todas as conferências, e por isso o pedido recusado não grava nada.
+# O dado é conferido antes do estado da tarefa, então os 422 da data e do tipo vêm antes dos
+# 409. A tarefa só é alterada depois de todas as conferências, e por isso o pedido recusado
+# não grava nada.
 @router.put(
     "/{task_id}",
     responses={
         404: {"description": "Tarefa não encontrada."},
-        409: {"description": "A tarefa concluída não pode mudar de dificuldade."},
+        409: {
+            "description": (
+                "A tarefa concluída não pode mudar de dificuldade nem de data, "
+                "e a tarefa travada não pode mudar de data."
+            )
+        },
     },
 )
 def update_task(task_id: TaskId, task_update: TaskUpdate, session: SessionDep) -> Task:
     task = get_task_or_404(session, task_id)
+
+    # Mandar a data que a tarefa já tem não é mudança, então nenhuma regra de data se aplica.
+    date_changed = task_update.due_date != task.due_date
+
+    if date_changed:
+        ensure_date_is_not_past(task_update.due_date)
 
     if task_update.task_type_id is not None:
         ensure_task_type_exists(session, task_update.task_type_id)
@@ -196,6 +237,9 @@ def update_task(task_id: TaskId, task_update: TaskUpdate, session: SessionDep) -
         raise HTTPException(
             status.HTTP_409_CONFLICT, detail="Desmarque a tarefa antes de mudar a dificuldade."
         )
+
+    if date_changed:
+        change_due_date(task, task_update.due_date)
 
     task.title = task_update.title
     task.notes = task_update.notes

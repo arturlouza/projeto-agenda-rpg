@@ -14,6 +14,14 @@ from app.rules.xp import TASK_BASE_XP
 UNKNOWN_TYPE_MESSAGE = "Esse tipo de tarefa não existe."
 PAST_DATE_MESSAGE = "A data não pode ser anterior a hoje."
 COMPLETED_DIFFICULTY_MESSAGE = "Desmarque a tarefa antes de mudar a dificuldade."
+COMPLETED_DATE_MESSAGE = "Desmarque a tarefa antes de mudar a data."
+LOCKED_DATE_MESSAGE = "A data desta tarefa está travada e não pode mudar."
+
+# O que uma tarefa inserida no banco precisa ter para estar concluída.
+COMPLETED_FIELDS = {
+    "completed": True,
+    "completed_at": datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+}
 
 
 # Banco em arquivo na pasta temporária do pytest, para nunca tocar no agenda.db real.
@@ -121,7 +129,8 @@ def assert_refused(client, test_engine, data):
     return response
 
 
-# Monta um pedido de edição completo, com os 5 campos, mais o que o teste quiser mudar.
+# Monta um pedido de edição completo, com os 6 campos, mais o que o teste quiser mudar. A data
+# é a mesma que create_task e insert_task usam, então ela só muda quando o teste pedir.
 def update_data(**changes):
     return {
         "title": "Título novo",
@@ -129,6 +138,7 @@ def update_data(**changes):
         "difficulty": "hard",
         "color": "#112233",
         "task_type_id": None,
+        "due_date": "2026-11-01",
     } | changes
 
 
@@ -843,7 +853,7 @@ def test_update_keeps_fields_that_the_request_does_not_set(client, test_engine):
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
 
-    update_task(client, task_id, difficulty="easy")
+    update_task(client, task_id, difficulty="easy", due_date="2026-10-30")
 
     saved_task = tasks_in_database(test_engine)[0]
     assert saved_task.id == task_id
@@ -855,7 +865,9 @@ def test_update_keeps_fields_that_the_request_does_not_set(client, test_engine):
 
 
 # Sem esta recusa, esquecer um campo apagaria as notas ou voltaria a cor ao padrão.
-@pytest.mark.parametrize("field", ["title", "notes", "difficulty", "color", "task_type_id"])
+@pytest.mark.parametrize(
+    "field", ["title", "notes", "difficulty", "color", "task_type_id", "due_date"]
+)
 def test_update_refuses_missing_field(client, test_engine, field):
     task = create_task(client, notes="Capítulo 3", color="#ABCDEF")
     data = update_data()
@@ -984,11 +996,9 @@ def test_update_refuses_unknown_task_type(client, test_engine, task_type_id):
     assert response.json()["detail"] == UNKNOWN_TYPE_MESSAGE
 
 
-# A data entra na edição só na etapa 5.9. Até lá, due_date é um campo desconhecido como os outros.
 @pytest.mark.parametrize(
     "extra_field",
     [
-        {"due_date": "2026-11-05"},
         {"completed": True},
         {"completed": False},
         {"postponements": 5},
@@ -1069,23 +1079,35 @@ def test_update_refuses_invalid_data_before_checking_task_state(client, test_eng
     assert response.json()["detail"] == UNKNOWN_TYPE_MESSAGE
 
 
-# Cada linha é um estado: atrasada, travada com data futura e travada por adiamentos e atraso.
+# Seção 6.1: mandar a data que a tarefa já tem não é mudança, então nenhuma regra de data se
+# aplica e o atraso não entra no contador. Cada linha é um estado: atrasada, travada por
+# adiamento manual, travada por atraso, travada pelos dois, concluída e concluída com data antiga.
 @pytest.mark.parametrize(
     "fields",
     [
         {"due_date": date(2026, 10, 30)},
         {"due_date": date(2026, 11, 5), "postponements": 3},
+        {"due_date": date(2026, 10, 29)},
         {"due_date": date(2026, 10, 30), "postponements": 3},
+        {"due_date": date(2026, 11, 1), **COMPLETED_FIELDS},
+        {"due_date": date(2026, 10, 30), **COMPLETED_FIELDS},
     ],
 )
-def test_overdue_or_locked_task_accepts_editing(client, test_engine, fields):
+def test_same_date_accepts_editing_in_any_state(client, test_engine, fields):
     task_id = insert_task(test_engine, **fields)
 
-    updated = update_task(client, task_id, title="Título novo")
+    updated = update_task(
+        client,
+        task_id,
+        title="Título novo",
+        difficulty="easy",
+        due_date=fields["due_date"].isoformat(),
+    )
 
     assert updated["title"] == "Título novo"
     assert updated["due_date"] == fields["due_date"].isoformat()
     assert updated["postponements"] == fields.get("postponements", 0)
+    assert tasks_in_database(test_engine)[0].title == "Título novo"
 
 
 @pytest.mark.parametrize("task_id", [999, 2147483647])
@@ -1100,3 +1122,251 @@ def test_update_refuses_id_out_of_range(client, test_engine, task_id):
     insert_task(test_engine, id=1)
 
     assert_update_refused(client, test_engine, task_id, update_data())
+
+
+@pytest.mark.parametrize("postponements, expected", [(0, 1), (1, 2), (2, 3)])
+def test_moving_date_later_counts_one_postponement(client, test_engine, postponements, expected):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 5), postponements=postponements)
+
+    updated = update_task(client, task_id, due_date="2026-11-10")
+
+    assert updated["due_date"] == "2026-11-10"
+    assert updated["postponements"] == expected
+    saved_task = tasks_in_database(test_engine)[0]
+    assert saved_task.due_date == date(2026, 11, 10)
+    assert saved_task.postponements == expected
+
+
+def test_changed_date_moves_the_task_in_the_day_list(client):
+    task = create_task(client)
+
+    updated = update_task(client, task["id"], due_date="2026-11-05")
+
+    assert day_tasks(client, "2026-11-05")["pending"] == [updated]
+    assert day_tasks(client, "2026-11-01")["pending"] == []
+
+
+# Na segunda vez, a data já é a mesma, então o pedido repetido não conta outro adiamento.
+def test_repeating_the_same_update_counts_one_postponement(client):
+    task = create_task(client)
+
+    update_task(client, task["id"], due_date="2026-11-05")
+    updated = update_task(client, task["id"], due_date="2026-11-05")
+
+    assert updated["postponements"] == 1
+
+
+# Seção 4.2: "0 + 2 + 1 = 3", para qualquer data nova, inclusive hoje.
+@pytest.mark.parametrize("new_date", ["2026-11-01", "2026-11-05"])
+def test_overdue_task_adds_days_late_to_the_counter(client, test_engine, new_date):
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 30))
+
+    updated = update_task(client, task_id, due_date=new_date)
+
+    assert updated["due_date"] == new_date
+    assert updated["postponements"] == 3
+
+
+# Antecipar não conta como adiamento, nem quando a data nova é hoje.
+@pytest.mark.parametrize("new_date", ["2026-11-03", "2026-11-01"])
+def test_moving_date_earlier_keeps_the_counter(client, test_engine, new_date):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 5), postponements=1)
+
+    updated = update_task(client, task_id, due_date=new_date)
+
+    assert updated["due_date"] == new_date
+    assert updated["postponements"] == 1
+
+
+# A segunda linha já está atrasada e 31/10 é depois da data dela, mas continua antes de hoje.
+@pytest.mark.parametrize("due_date", [date(2026, 11, 5), date(2026, 10, 30)])
+def test_update_refuses_new_date_before_today(client, test_engine, due_date):
+    task_id = insert_task(test_engine, due_date=due_date)
+
+    response = assert_update_refused(
+        client, test_engine, task_id, update_data(due_date="2026-10-31")
+    )
+
+    assert response.json()["detail"] == PAST_DATE_MESSAGE
+
+
+@pytest.mark.parametrize("due_date", ["01/11/2026", "2026-13-01", "", None])
+def test_update_refuses_invalid_date(client, test_engine, due_date):
+    task = create_task(client)
+
+    assert_update_refused(client, test_engine, task["id"], update_data(due_date=due_date))
+
+
+# Com 2 adiamentos efetivos, a data ainda muda: um pelo contador e outro, na segunda linha, pelo
+# dia de atraso. A conta dá no máximo 2 + 1 = 3 (seção 6.1).
+@pytest.mark.parametrize(
+    "postponements, due_date", [(2, date(2026, 11, 1)), (1, date(2026, 10, 31))]
+)
+def test_date_still_changes_with_two_effective_postponements(
+    client, test_engine, postponements, due_date
+):
+    task_id = insert_task(test_engine, due_date=due_date, postponements=postponements)
+
+    updated = update_task(client, task_id, due_date="2026-11-05")
+
+    assert updated["due_date"] == "2026-11-05"
+    assert updated["postponements"] == 3
+
+
+# Seção 4.2: a data 5 dias à frente não pode destravar a tarefa (3 − 5 = −2). As datas são uma
+# depois, uma antes da atual e hoje: nenhuma passa pela trava, nem para antecipar.
+@pytest.mark.parametrize("new_date", ["2026-11-10", "2026-11-03", "2026-11-01"])
+def test_task_locked_by_manual_postponements_refuses_any_new_date(client, test_engine, new_date):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 6), postponements=3)
+
+    response = assert_update_refused(
+        client, test_engine, task_id, update_data(due_date=new_date), status_code=409
+    )
+
+    assert response.json()["detail"] == LOCKED_DATE_MESSAGE
+
+
+# Cada estado é uma forma de travar com atraso: só atraso, adiamento mais atraso e 3 adiamentos
+# mais atraso. A data nova é hoje ou depois, porque antes de hoje o pedido daria 422.
+@pytest.mark.parametrize(
+    "postponements, due_date",
+    [(0, date(2026, 10, 29)), (1, date(2026, 10, 30)), (3, date(2026, 10, 30))],
+)
+@pytest.mark.parametrize("new_date", ["2026-11-01", "2026-11-05"])
+def test_task_locked_by_days_late_refuses_new_date(
+    client, test_engine, postponements, due_date, new_date
+):
+    task_id = insert_task(test_engine, due_date=due_date, postponements=postponements)
+
+    response = assert_update_refused(
+        client, test_engine, task_id, update_data(due_date=new_date), status_code=409
+    )
+
+    assert response.json()["detail"] == LOCKED_DATE_MESSAGE
+
+
+# A dificuldade é a mesma da tarefa, então só a data explica o 409. A segunda linha antecipa.
+@pytest.mark.parametrize(
+    "due_date, new_date",
+    [(date(2026, 11, 1), "2026-11-05"), (date(2026, 11, 5), "2026-11-03")],
+)
+def test_completed_task_refuses_changing_date(client, test_engine, due_date, new_date):
+    task_id = insert_task(test_engine, due_date=due_date, **COMPLETED_FIELDS)
+
+    response = assert_update_refused(
+        client,
+        test_engine,
+        task_id,
+        update_data(difficulty="easy", due_date=new_date),
+        status_code=409,
+    )
+
+    assert response.json()["detail"] == COMPLETED_DATE_MESSAGE
+
+
+# A data anterior a hoje é um dado inválido, então vale o 422 mesmo com a tarefa impedida de
+# mudar. Cada linha é um estado: travada por adiamento manual, travada por atraso (antecipar
+# é sempre ir para antes de hoje, então aqui nunca dá 409) e concluída.
+@pytest.mark.parametrize(
+    "fields, new_date",
+    [
+        ({"due_date": date(2026, 11, 6), "postponements": 3}, "2026-10-31"),
+        ({"due_date": date(2026, 10, 29)}, "2026-10-28"),
+        (COMPLETED_FIELDS, "2026-10-31"),
+    ],
+)
+def test_past_date_is_refused_before_checking_task_state(client, test_engine, fields, new_date):
+    task_id = insert_task(test_engine, **fields)
+
+    response = assert_update_refused(
+        client, test_engine, task_id, update_data(difficulty="easy", due_date=new_date)
+    )
+
+    assert response.json()["detail"] == PAST_DATE_MESSAGE
+
+
+def test_past_date_is_refused_before_checking_task_type(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 5))
+
+    response = assert_update_refused(
+        client, test_engine, task_id, update_data(due_date="2026-10-31", task_type_id=999)
+    )
+
+    assert response.json()["detail"] == PAST_DATE_MESSAGE
+
+
+# O tipo é um dado, então o 422 dele vem antes do 409 da trava e do 409 da tarefa concluída.
+@pytest.mark.parametrize(
+    "fields",
+    [{"due_date": date(2026, 11, 6), "postponements": 3}, COMPLETED_FIELDS],
+)
+def test_unknown_task_type_is_refused_before_changing_date(client, test_engine, fields):
+    task_id = insert_task(test_engine, **fields)
+
+    response = assert_update_refused(
+        client,
+        test_engine,
+        task_id,
+        update_data(difficulty="easy", due_date="2026-11-10", task_type_id=999),
+    )
+
+    assert response.json()["detail"] == UNKNOWN_TYPE_MESSAGE
+
+
+# A tarefa concluída recebe a mensagem que diz o que fazer: desmarcar. A trava vem depois.
+def test_completed_and_locked_task_gets_the_completed_message(client, test_engine):
+    task_id = insert_task(
+        test_engine, due_date=date(2026, 11, 5), postponements=3, **COMPLETED_FIELDS
+    )
+
+    response = assert_update_refused(
+        client,
+        test_engine,
+        task_id,
+        update_data(difficulty="easy", due_date="2026-11-10"),
+        status_code=409,
+    )
+
+    assert response.json()["detail"] == COMPLETED_DATE_MESSAGE
+
+
+# O roteiro manual da etapa 5.9, do começo ao fim, só pela API.
+def test_three_date_changes_lock_the_date_but_title_still_changes(client, test_engine):
+    task = create_task(client)
+
+    for new_date, expected in [("2026-11-02", 1), ("2026-11-03", 2), ("2026-11-04", 3)]:
+        updated = update_task(client, task["id"], due_date=new_date)
+        assert updated["postponements"] == expected
+
+    assert_update_refused(
+        client, test_engine, task["id"], update_data(due_date="2026-11-05"), status_code=409
+    )
+
+    updated = update_task(client, task["id"], title="Só o título", due_date="2026-11-04")
+
+    assert updated["title"] == "Só o título"
+    assert updated["postponements"] == 3
+
+
+# Às 01h30 UTC de 01/11 ainda é 31/10 em Brasília, então o atraso é de 1 dia. Em UTC, seriam
+# 2 dias: 31/10 daria 422, por ser anterior ao dia em UTC.
+def test_date_change_counts_days_late_in_brasilia(client, test_engine, monkeypatch):
+    fixed_now = datetime(2026, 11, 1, 1, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr("app.dates.utc_now", lambda: fixed_now)
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 30))
+
+    updated = update_task(client, task_id, due_date="2026-10-31")
+
+    assert updated["postponements"] == 2
+
+
+# No mesmo horário, a tarefa vence "hoje" em Brasília e não está atrasada. Em UTC, ela teria
+# 1 dia de atraso e estaria travada, com 2 + 1 = 3 adiamentos efetivos.
+def test_lock_counts_days_late_in_brasilia(client, test_engine, monkeypatch):
+    fixed_now = datetime(2026, 11, 1, 1, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr("app.dates.utc_now", lambda: fixed_now)
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 31), postponements=2)
+
+    updated = update_task(client, task_id, due_date="2026-11-05")
+
+    assert updated["postponements"] == 3

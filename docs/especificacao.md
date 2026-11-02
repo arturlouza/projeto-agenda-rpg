@@ -482,10 +482,11 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 **Etapa 5.9: mudança de data na edição (fecha a tarefa 5)**
 
 - **Entrega:** a edição passa a exigir `due_date`, como os outros campos, com as regras da seção 4.2 e a regra do "mesmo valor". A lógica fica numa função que a tarefa 7 vai reaproveitar. A rota do botão Adiar não entra aqui.
-- **Arquivos:** `app/routers/tasks.py`, `tests/test_tasks.py`.
+- **Arquivos:** `app/routers/tasks.py`, `tests/test_tasks.py`, `docs/especificacao.md` (registro das decisões e Mapa do código).
 - **Como testar:** `pytest`. No `/docs`, criar uma tarefa, mudar a data para depois três vezes (`postponements` chega a 3), ver a quarta tentativa dar 409 e ver que editar só o título, mandando a mesma data, ainda funciona.
-- **Pronto quando:** este é o critério da tarefa 5 na tabela, "funciona pelo `/docs` e os testes cobrem as regras". Casos testados: data anterior a hoje dá 422; atrasada com 0 adiamentos e 2 dias de atraso fica com contador 3; antecipar não conta; travada por atraso ou por adiamento manual recusa até antecipar (409); concluída recusa mudar a data (409); travada ou atrasada aceita editar o título; o pedido recusado não grava nada.
-- **Decisão (tomada na etapa 5.8):** quando 422 e 409 se aplicam ao mesmo pedido, vale o 422, porque o dado é conferido antes do estado da tarefa.
+- **Pronto quando:** este é o critério da tarefa 5 na tabela, "funciona pelo `/docs` e os testes cobrem as regras". Casos testados: data anterior a hoje dá 422; atrasada com 0 adiamentos e 2 dias de atraso fica com contador 3; antecipar não conta; travada por atraso ou por adiamento manual recusa inclusive antecipar: 409 quando a data nova é hoje ou depois, 422 quando é anterior a hoje, porque o dado é conferido antes do estado; concluída recusa mudar a data (409); travada ou atrasada aceita editar o título; o pedido recusado não grava nada.
+- **Decisão (tomada na etapa 5.8):** quando 422 e 409 se aplicam ao mesmo pedido, vale o 422, porque o dado é conferido antes do estado da tarefa. Por isso, antecipar uma tarefa travada por atraso dá sempre 422: a data dela já é anterior a hoje, então qualquer data mais antiga também é.
+- **Decisão:** `ensure_date_is_not_past` e `change_due_date` ficam em `tasks.py`, e a tarefa 7 chama as duas, nesta ordem. São duas funções porque a conferência do tipo fica entre elas. Elas não vão para `rules/xp.py` porque leem o relógio, alteram a `Task` e respondem com códigos HTTP; as contas continuam em `xp.py`.
 
 **Fora da tarefa 5:**
 
@@ -568,13 +569,13 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | `backend/app/dates.py` | Responde "que dia é" no horário de Brasília. | `APP_TIMEZONE`, `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4, 6.2 | `test_dates.py` |
 | `backend/app/rules/xp.py` | Guarda as regras de XP, adiamento e nível, com os números no topo. | `task_xp`, `effective_postponements`, `is_due_date_locked`, `postponements_after_date_change`, `xp_to_next_level`, `level_from_total_xp` | 4.1, 4.2, 4.5 | `test_xp.py` |
 | `backend/app/routers/task_types.py` | API dos tipos de tarefa; também define `SessionDep` e `MAX_ID`, usados em `tasks.py`. | `POST /task-types`, `GET /task-types`, `PATCH /task-types/{task_type_id}`, `DELETE /task-types/{task_type_id}` | 6.1, 6.6 | `test_task_types.py` |
-| `backend/app/routers/tasks.py` | API das tarefas: criar, listar por dia e semana, editar e excluir. | `POST /tasks`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}` | 6.1, 6.2, 4.3 | `test_tasks.py` |
+| `backend/app/routers/tasks.py` | API das tarefas: criar, listar por dia e semana, editar (inclusive a data) e excluir. | `POST /tasks`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `ensure_date_is_not_past`, `change_due_date` | 6.1, 6.2, 4.2, 4.3 | `test_tasks.py` |
 | `backend/tests/test_health.py` | Testa a rota `/health`. | `test_health_returns_ok` | 10 (tarefa 1) | não se aplica |
 | `backend/tests/test_database.py` | Testa a criação das tabelas ao iniciar, os valores padrão e a chave estrangeira. | `test_app_startup_creates_tables`, `test_task_with_unknown_task_type_is_refused` | 6.1 | não se aplica |
 | `backend/tests/test_dates.py` | Testa o fuso, o "hoje", os limites do dia e a semana. | testes de `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4 | não se aplica |
 | `backend/tests/test_xp.py` | Testa XP, adiamentos, trava da data e níveis. | testes de cada função de `xp.py` | 4.1, 4.2, 4.5 | não se aplica |
 | `backend/tests/test_task_types.py` | Testa a API dos tipos de tarefa. | testes de criar, listar, renomear e excluir | 6.1 | não se aplica |
-| `backend/tests/test_tasks.py` | Testa a API das tarefas. | auxiliares `insert_task`, `insert_xp_entry`, `update_data` | 6.1, 6.2, 4.3 | não se aplica |
+| `backend/tests/test_tasks.py` | Testa a API das tarefas. | auxiliares `insert_task`, `insert_xp_entry`, `update_data` | 6.1, 6.2, 4.2, 4.3 | não se aplica |
 | `backend/requirements.txt` | Fixa as versões das dependências. | não se aplica | 2 | não se aplica |
 | `backend/pytest.ini` | Faz o pytest encontrar a pasta `app`. | `pythonpath` | não se aplica | não se aplica |
 | `.gitignore` | Diz o que fica fora do Git. | não se aplica | não se aplica | não se aplica |
