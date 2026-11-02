@@ -13,3 +13,12 @@ __pycache__/
 
 # Segredos, como senhas: nunca devem ser publicados
 .env
+
+# Configurações pessoais do Claude Code nesta máquina: não valem para o projeto
+.claude/settings.local.json
+
+# Miniaturas de imagens que o Windows cria sozinho dentro das pastas
+Thumbs.db
+
+# Preferências de exibição de pasta que o Windows cria sozinho
+desktop.ini
