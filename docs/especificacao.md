@@ -419,19 +419,21 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 
 **Etapa 5.8: editar tarefa, ainda sem mudar a data**
 
-- **Entrega:** rota de edição de título, notas, cor, dificuldade e tipo, com as mesmas validações da criação. Em tarefa concluída, mudar a dificuldade dá 409 e mandar o mesmo valor passa.
-- **Arquivos:** `app/routers/tasks.py`, `tests/test_tasks.py`.
+- **Entrega:** `PUT /tasks/{task_id}`, rota de edição de título, notas, cor, dificuldade e tipo, com as mesmas validações da criação. Em tarefa concluída, mudar a dificuldade dá 409 e mandar o mesmo valor passa.
+- **Arquivos:** `app/routers/tasks.py`, `tests/test_tasks.py`, `docs/especificacao.md` (registro das decisões).
 - **Como testar:** `pytest tests/test_tasks.py`. No `/docs`, editar uma tarefa e listar para conferir.
 - **Pronto quando:** cada campo é editado e validado; o pedido recusado não grava nada; tarefa concluída aceita título, notas, cor e tipo; 404 e 422 de id funcionam.
-- **A decidir no plano desta etapa:** o que acontece com um campo ausente na edição. Recomendação: exigir todos os campos, já que o formulário envia todos. Assim, esquecer um campo não apaga as notas nem volta a cor ao padrão.
+- **Decisão:** a edição exige todos os campos, porque o formulário envia todos. Assim, esquecer um campo não apaga as notas nem volta a cor ao padrão. Notas e tipo aceitam `null`, que remove o valor de propósito.
+- **Decisão:** a edição usa `PUT`, porque o pedido manda o registro inteiro. O `PUT` substitui só o que o cliente pode definir: `id`, `completed`, `completed_at`, `postponements` e `created_at` ficam fora do pedido e não mudam.
+- **Decisão:** nesta etapa, `due_date` no pedido dá 422, como todo campo desconhecido. Quando 422 e 409 se aplicam ao mesmo pedido, vale o 422, porque o dado é conferido antes do estado da tarefa.
 
 **Etapa 5.9: mudança de data na edição (fecha a tarefa 5)**
 
-- **Entrega:** a edição passa a aceitar `due_date`, com as regras da seção 4.2 e a regra do "mesmo valor". A lógica fica numa função que a tarefa 7 vai reaproveitar. A rota do botão Adiar não entra aqui.
+- **Entrega:** a edição passa a exigir `due_date`, como os outros campos, com as regras da seção 4.2 e a regra do "mesmo valor". A lógica fica numa função que a tarefa 7 vai reaproveitar. A rota do botão Adiar não entra aqui.
 - **Arquivos:** `app/routers/tasks.py`, `tests/test_tasks.py`.
 - **Como testar:** `pytest`. No `/docs`, criar uma tarefa, mudar a data para depois três vezes (`postponements` chega a 3), ver a quarta tentativa dar 409 e ver que editar só o título, mandando a mesma data, ainda funciona.
 - **Pronto quando:** este é o critério da tarefa 5 na tabela, "funciona pelo `/docs` e os testes cobrem as regras". Casos testados: data anterior a hoje dá 422; atrasada com 0 adiamentos e 2 dias de atraso fica com contador 3; antecipar não conta; travada por atraso ou por adiamento manual recusa até antecipar (409); concluída recusa mudar a data (409); travada ou atrasada aceita editar o título; o pedido recusado não grava nada.
-- **A decidir no plano desta etapa:** qual recusa vale quando 422 e 409 se aplicam ao mesmo pedido. Recomendação: o 422 primeiro, porque o dado é conferido antes do estado da tarefa.
+- **Decisão (tomada na etapa 5.8):** quando 422 e 409 se aplicam ao mesmo pedido, vale o 422, porque o dado é conferido antes do estado da tarefa.
 
 **Fora da tarefa 5:**
 

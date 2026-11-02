@@ -25,32 +25,46 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 TaskId = Annotated[int, Path(ge=1, le=MAX_ID)]
 
 
-# O que a API recebe ao criar uma tarefa. É separada de Task porque modelos com table=True
-# não validam os dados. A data não é conferida aqui porque a regra vale só para data nova,
-# e a edição não pode recusar uma tarefa atrasada por causa da data que não mudou.
-class TaskInput(SQLModel):
+# Regras de cada campo de texto, usadas tanto ao criar quanto ao editar.
+TaskTitle = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TASK_TITLE_LENGTH),
+]
+TaskNotes = Annotated[
+    str, StringConstraints(strip_whitespace=True, max_length=MAX_TASK_NOTES_LENGTH)
+]
+TaskColor = Annotated[str, StringConstraints(pattern=TASK_COLOR_PATTERN, to_upper=True)]
+
+
+# O que a API recebe ao editar uma tarefa. É separada de Task porque modelos com table=True
+# não validam os dados. Nenhum campo tem valor padrão, então todos são obrigatórios: esquecer
+# um campo dá 422, em vez de apagar as notas ou voltar a cor ao padrão. Notas e tipo aceitam
+# null, que é o jeito de remover o valor de propósito.
+class TaskUpdate(SQLModel):
     # Campo desconhecido é recusado, então o pedido não escolhe postponements nem completed.
     model_config = ConfigDict(extra="forbid")
 
-    title: Annotated[
-        str,
-        StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TASK_TITLE_LENGTH),
-    ]
-    notes: Annotated[
-        str, StringConstraints(strip_whitespace=True, max_length=MAX_TASK_NOTES_LENGTH)
-    ] | None = None
-    due_date: date
+    title: TaskTitle
+    notes: TaskNotes | None
     difficulty: Difficulty
-    color: Annotated[
-        str, StringConstraints(pattern=TASK_COLOR_PATTERN, to_upper=True)
-    ] = DEFAULT_TASK_COLOR
-    task_type_id: int | None = None
+    color: TaskColor
+    task_type_id: int | None
 
     # Roda depois de tirar os espaços, então notas só com espaços também viram None.
     @field_validator("notes")
     @classmethod
     def empty_notes_become_none(cls, notes: str | None) -> str | None:
         return notes or None
+
+
+# O que a API recebe ao criar uma tarefa: as mesmas regras da edição, mais a data e os valores
+# padrão. A data não é conferida aqui porque a regra vale só para data nova, e a edição não
+# pode recusar uma tarefa atrasada por causa da data que não mudou.
+class TaskInput(TaskUpdate):
+    due_date: date
+    notes: TaskNotes | None = None
+    color: TaskColor = DEFAULT_TASK_COLOR
+    task_type_id: int | None = None
 
 
 # O que a API devolve ao listar um dia: os três grupos da visão do dia (seção 6.2).
@@ -64,6 +78,14 @@ class DayTasks(SQLModel):
 class WeekDay(SQLModel):
     day: date
     tasks: list[Task]
+
+
+# Busca a tarefa pelo id e responde 404 se ela não existir.
+def get_task_or_404(session: Session, task_id: int) -> Task:
+    task = session.get(Task, task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Tarefa não encontrada.")
+    return task
 
 
 # Responde 422 se o tipo não existir. O intervalo é conferido antes de consultar o banco,
@@ -155,6 +177,37 @@ def list_tasks_by_week(day: date, session: SessionDep) -> list[WeekDay]:
     return week
 
 
+# O dado é conferido antes do estado da tarefa, então o 422 do tipo vem antes do 409. A tarefa
+# só é alterada depois de todas as conferências, e por isso o pedido recusado não grava nada.
+@router.put(
+    "/{task_id}",
+    responses={
+        404: {"description": "Tarefa não encontrada."},
+        409: {"description": "A tarefa concluída não pode mudar de dificuldade."},
+    },
+)
+def update_task(task_id: TaskId, task_update: TaskUpdate, session: SessionDep) -> Task:
+    task = get_task_or_404(session, task_id)
+
+    if task_update.task_type_id is not None:
+        ensure_task_type_exists(session, task_update.task_type_id)
+
+    if task.completed and task_update.difficulty != task.difficulty:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail="Desmarque a tarefa antes de mudar a dificuldade."
+        )
+
+    task.title = task_update.title
+    task.notes = task_update.notes
+    task.difficulty = task_update.difficulty
+    task.color = task_update.color
+    task.task_type_id = task_update.task_type_id
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+    return task
+
+
 # O XP já ganho continua no histórico: as linhas da tarefa só perdem o vínculo com ela (seção
 # 4.3). Tudo vale só no commit, numa única transação: se algo falhar no meio, nada muda no banco.
 @router.delete(
@@ -163,9 +216,7 @@ def list_tasks_by_week(day: date, session: SessionDep) -> list[WeekDay]:
     responses={404: {"description": "Tarefa não encontrada."}},
 )
 def delete_task(task_id: TaskId, session: SessionDep) -> None:
-    task = session.get(Task, task_id)
-    if task is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Tarefa não encontrada.")
+    task = get_task_or_404(session, task_id)
 
     for entry in session.exec(select(XpEntry).where(XpEntry.task_id == task_id)).all():
         entry.task_id = None

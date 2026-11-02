@@ -13,6 +13,7 @@ from app.rules.xp import TASK_BASE_XP
 
 UNKNOWN_TYPE_MESSAGE = "Esse tipo de tarefa não existe."
 PAST_DATE_MESSAGE = "A data não pode ser anterior a hoje."
+COMPLETED_DIFFICULTY_MESSAGE = "Desmarque a tarefa antes de mudar a dificuldade."
 
 
 # Banco em arquivo na pasta temporária do pytest, para nunca tocar no agenda.db real.
@@ -117,6 +118,35 @@ def assert_refused(client, test_engine, data):
 
     assert response.status_code == 422
     assert tasks_in_database(test_engine) == []
+    return response
+
+
+# Monta um pedido de edição completo, com os 5 campos, mais o que o teste quiser mudar.
+def update_data(**changes):
+    return {
+        "title": "Título novo",
+        "notes": "Nota nova",
+        "difficulty": "hard",
+        "color": "#112233",
+        "task_type_id": None,
+    } | changes
+
+
+# Edita uma tarefa pela API, confere que deu certo e devolve o JSON da resposta.
+def update_task(client, task_id, **changes):
+    response = client.put(f"/tasks/{task_id}", json=update_data(**changes))
+    assert response.status_code == 200
+    return response.json()
+
+
+# Confere que a edição foi recusada com o código esperado e que o registro continua igual.
+def assert_update_refused(client, test_engine, task_id, data, status_code=422):
+    before = [task.model_dump() for task in tasks_in_database(test_engine)]
+
+    response = client.put(f"/tasks/{task_id}", json=data)
+
+    assert response.status_code == status_code
+    assert [task.model_dump() for task in tasks_in_database(test_engine)] == before
     return response
 
 
@@ -771,3 +801,302 @@ def test_failed_delete_changes_nothing(client, test_engine, monkeypatch):
 
     assert [task.id for task in tasks_in_database(test_engine)] == [task_id]
     assert [entry.task_id for entry in xp_entries_in_database(test_engine)] == [task_id]
+
+
+def test_update_saves_all_fields(client, test_engine):
+    task_type_id = client.post("/task-types", json={"name": "Leitura"}).json()["id"]
+    task = create_task(client)
+
+    updated = update_task(client, task["id"], task_type_id=task_type_id)
+
+    assert updated["title"] == "Título novo"
+    assert updated["notes"] == "Nota nova"
+    assert updated["difficulty"] == "hard"
+    assert updated["color"] == "#112233"
+    assert updated["task_type_id"] == task_type_id
+
+    saved_task = tasks_in_database(test_engine)[0]
+    assert saved_task.title == "Título novo"
+    assert saved_task.notes == "Nota nova"
+    assert saved_task.difficulty == "hard"
+    assert saved_task.color == "#112233"
+    assert saved_task.task_type_id == task_type_id
+
+
+def test_update_appears_in_the_day_list(client):
+    task = create_task(client)
+
+    updated = update_task(client, task["id"])
+
+    assert day_tasks(client, task["due_date"])["pending"] == [updated]
+
+
+# O PUT substitui só o que o pedido pode definir. Os valores são diferentes dos padrões, para
+# provar que a rota não volta nenhum deles ao padrão.
+def test_update_keeps_fields_that_the_request_does_not_set(client, test_engine):
+    task_id = insert_task(
+        test_engine,
+        due_date=date(2026, 10, 30),
+        completed=True,
+        completed_at=datetime(2026, 10, 31, 12, 0, tzinfo=timezone.utc),
+        postponements=2,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    update_task(client, task_id, difficulty="easy")
+
+    saved_task = tasks_in_database(test_engine)[0]
+    assert saved_task.id == task_id
+    assert saved_task.due_date == date(2026, 10, 30)
+    assert saved_task.completed is True
+    assert saved_task.completed_at == datetime(2026, 10, 31, 12, 0, tzinfo=timezone.utc)
+    assert saved_task.postponements == 2
+    assert saved_task.created_at == datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+# Sem esta recusa, esquecer um campo apagaria as notas ou voltaria a cor ao padrão.
+@pytest.mark.parametrize("field", ["title", "notes", "difficulty", "color", "task_type_id"])
+def test_update_refuses_missing_field(client, test_engine, field):
+    task = create_task(client, notes="Capítulo 3", color="#ABCDEF")
+    data = update_data()
+    del data[field]
+
+    assert_update_refused(client, test_engine, task["id"], data)
+
+
+def test_update_with_null_removes_notes_and_task_type(client, test_engine):
+    task_type_id = client.post("/task-types", json={"name": "Leitura"}).json()["id"]
+    task = create_task(client, notes="Capítulo 3", task_type_id=task_type_id)
+
+    updated = update_task(client, task["id"], notes=None, task_type_id=None)
+
+    assert updated["notes"] is None
+    assert updated["task_type_id"] is None
+    assert tasks_in_database(test_engine)[0].notes is None
+    assert tasks_in_database(test_engine)[0].task_type_id is None
+
+
+def test_update_removes_spaces_from_the_ends_of_the_title(client):
+    task = create_task(client)
+
+    updated = update_task(client, task["id"], title="  Título novo  ")
+
+    assert updated["title"] == "Título novo"
+
+
+# Os espaços das pontas saem antes da contagem, então os dois títulos têm 100 caracteres.
+@pytest.mark.parametrize("title", ["a" * 100, "  " + "a" * 100 + "  "])
+def test_update_accepts_title_with_100_characters(client, title):
+    task = create_task(client)
+
+    updated = update_task(client, task["id"], title=title)
+
+    assert updated["title"] == "a" * 100
+
+
+@pytest.mark.parametrize("title", ["", "   ", "a" * 101, None])
+def test_update_refuses_invalid_title(client, test_engine, title):
+    task = create_task(client)
+
+    assert_update_refused(client, test_engine, task["id"], update_data(title=title))
+
+
+def test_update_removes_spaces_from_the_ends_of_the_notes(client):
+    task = create_task(client)
+
+    updated = update_task(client, task["id"], notes="  Capítulo 3  ")
+
+    assert updated["notes"] == "Capítulo 3"
+
+
+# Os espaços das pontas saem antes da contagem, então as duas notas têm 1.000 caracteres.
+@pytest.mark.parametrize("notes", ["a" * 1000, "  " + "a" * 1000 + "  "])
+def test_update_accepts_notes_with_1000_characters(client, notes):
+    task = create_task(client)
+
+    updated = update_task(client, task["id"], notes=notes)
+
+    assert updated["notes"] == "a" * 1000
+
+
+@pytest.mark.parametrize("notes", ["", "   "])
+def test_update_saves_empty_notes_as_null(client, test_engine, notes):
+    task = create_task(client, notes="Capítulo 3")
+
+    updated = update_task(client, task["id"], notes=notes)
+
+    assert updated["notes"] is None
+    assert tasks_in_database(test_engine)[0].notes is None
+
+
+def test_update_refuses_notes_with_1001_characters(client, test_engine):
+    task = create_task(client, notes="Capítulo 3")
+
+    assert_update_refused(client, test_engine, task["id"], update_data(notes="a" * 1001))
+
+
+@pytest.mark.parametrize("color", ["#ff0000", "#FF0000", "#Ff0000"])
+def test_update_saves_color_in_uppercase(client, color):
+    task = create_task(client)
+
+    updated = update_task(client, task["id"], color=color)
+
+    assert updated["color"] == "#FF0000"
+
+
+# O null é recusado aqui, ao contrário de notas e tipo: toda tarefa tem uma cor.
+@pytest.mark.parametrize(
+    "color", ["#FFF", "FF0000", "#GGGGGG", "#FF00000", " #FF0000 ", "#FF0000\n", "", None]
+)
+def test_update_refuses_invalid_color(client, test_engine, color):
+    task = create_task(client)
+
+    assert_update_refused(client, test_engine, task["id"], update_data(color=color))
+
+
+@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
+def test_update_changes_difficulty_of_pending_task(client, difficulty):
+    task = create_task(client, difficulty="medium")
+
+    updated = update_task(client, task["id"], difficulty=difficulty)
+
+    assert updated["difficulty"] == difficulty
+
+
+@pytest.mark.parametrize("difficulty", ["extreme", "Easy", "", None])
+def test_update_refuses_invalid_difficulty(client, test_engine, difficulty):
+    task = create_task(client)
+
+    assert_update_refused(client, test_engine, task["id"], update_data(difficulty=difficulty))
+
+
+# Inexistente ou fora do intervalo do banco, a recusa e a mensagem são as mesmas.
+@pytest.mark.parametrize(
+    "task_type_id", [999, 0, -1, 2147483647, 2147483648, 10**30, -(10**30)]
+)
+def test_update_refuses_unknown_task_type(client, test_engine, task_type_id):
+    task = create_task(client)
+
+    response = assert_update_refused(
+        client, test_engine, task["id"], update_data(task_type_id=task_type_id)
+    )
+
+    assert response.json()["detail"] == UNKNOWN_TYPE_MESSAGE
+
+
+# A data entra na edição só na etapa 5.9. Até lá, due_date é um campo desconhecido como os outros.
+@pytest.mark.parametrize(
+    "extra_field",
+    [
+        {"due_date": "2026-11-05"},
+        {"completed": True},
+        {"completed": False},
+        {"postponements": 5},
+        {"completed_at": "2026-11-01T12:00:00Z"},
+        {"id": 123},
+        {"created_at": "2026-11-01T12:00:00Z"},
+        {"note": "nome errado"},
+    ],
+)
+def test_update_refuses_unknown_field(client, test_engine, extra_field):
+    task = create_task(client)
+
+    assert_update_refused(client, test_engine, task["id"], update_data(**extra_field))
+
+
+# A dificuldade é a mesma do pedido, então só título, notas, cor e tipo mudam.
+def test_completed_task_accepts_title_notes_color_and_task_type(client, test_engine):
+    task_type_id = client.post("/task-types", json={"name": "Leitura"}).json()["id"]
+    task_id = insert_task(
+        test_engine,
+        difficulty="hard",
+        completed=True,
+        completed_at=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+    )
+
+    updated = update_task(client, task_id, difficulty="hard", task_type_id=task_type_id)
+
+    assert updated["title"] == "Título novo"
+    assert updated["notes"] == "Nota nova"
+    assert updated["color"] == "#112233"
+    assert updated["task_type_id"] == task_type_id
+    assert updated["completed"] is True
+
+
+def test_completed_task_refuses_changing_difficulty(client, test_engine):
+    task_id = insert_task(
+        test_engine,
+        difficulty="easy",
+        completed=True,
+        completed_at=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+    )
+
+    response = assert_update_refused(
+        client, test_engine, task_id, update_data(difficulty="hard"), status_code=409
+    )
+
+    assert response.json()["detail"] == COMPLETED_DIFFICULTY_MESSAGE
+
+
+# Seção 6.1: o formulário envia todos os campos, e mandar o valor atual não é mudança.
+def test_completed_task_accepts_the_same_difficulty(client, test_engine):
+    task_id = insert_task(
+        test_engine,
+        difficulty="hard",
+        completed=True,
+        completed_at=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+    )
+
+    updated = update_task(client, task_id, title="Título novo", difficulty="hard")
+
+    assert updated["title"] == "Título novo"
+    assert updated["difficulty"] == "hard"
+
+
+# O dado é conferido antes do estado da tarefa, então o pedido com os dois problemas dá 422.
+def test_update_refuses_invalid_data_before_checking_task_state(client, test_engine):
+    task_id = insert_task(
+        test_engine,
+        difficulty="easy",
+        completed=True,
+        completed_at=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+    )
+
+    response = assert_update_refused(
+        client, test_engine, task_id, update_data(difficulty="hard", task_type_id=999)
+    )
+
+    assert response.json()["detail"] == UNKNOWN_TYPE_MESSAGE
+
+
+# Cada linha é um estado: atrasada, travada com data futura e travada por adiamentos e atraso.
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"due_date": date(2026, 10, 30)},
+        {"due_date": date(2026, 11, 5), "postponements": 3},
+        {"due_date": date(2026, 10, 30), "postponements": 3},
+    ],
+)
+def test_overdue_or_locked_task_accepts_editing(client, test_engine, fields):
+    task_id = insert_task(test_engine, **fields)
+
+    updated = update_task(client, task_id, title="Título novo")
+
+    assert updated["title"] == "Título novo"
+    assert updated["due_date"] == fields["due_date"].isoformat()
+    assert updated["postponements"] == fields.get("postponements", 0)
+
+
+@pytest.mark.parametrize("task_id", [999, 2147483647])
+def test_update_unknown_task_returns_404(client, test_engine, task_id):
+    insert_task(test_engine, id=1)
+
+    assert_update_refused(client, test_engine, task_id, update_data(), status_code=404)
+
+
+@pytest.mark.parametrize("task_id", [0, -1, 2147483648, 10**30])
+def test_update_refuses_id_out_of_range(client, test_engine, task_id):
+    insert_task(test_engine, id=1)
+
+    assert_update_refused(client, test_engine, task_id, update_data())
