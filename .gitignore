@@ -13,6 +13,9 @@ __pycache__/
 
 # Segredos, como senhas: nunca devem ser publicados
 .env
+.env.*
+# Exceção: um modelo só com os nomes das variáveis, sem valores, pode ser publicado
+!.env.example
 
 # Configurações pessoais do Claude Code nesta máquina: não valem para o projeto
 .claude/settings.local.json

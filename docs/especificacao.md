@@ -480,8 +480,8 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | `backend/requirements.txt` | Fixa as versões das dependências. | não se aplica | 2 | não se aplica |
 | `backend/pytest.ini` | Faz o pytest encontrar a pasta `app`. | `pythonpath` | não se aplica | não se aplica |
 | `.gitignore` | Diz o que fica fora do Git. | não se aplica | não se aplica | não se aplica |
-| `.claude/settings.json` | Faz o Claude Code salvar os planos em `docs/planos`. | `plansDirectory` | não se aplica | não se aplica |
-| `CLAUDE.md` | Define como trabalhar comigo, a stack, as convenções e os comandos. | regras 1 a 13, exceções aprovadas | não se aplica | não se aplica |
+| `.claude/settings.json` | Faz o Claude Code salvar os planos em `docs/planos` e bloqueia a leitura do `.env` e das variações. | `plansDirectory`, `permissions.deny` (regra 14 do `CLAUDE.md`) | não se aplica | não se aplica |
+| `CLAUDE.md` | Define como trabalhar comigo, a stack, as convenções e os comandos. | regras 1 a 14, exceções aprovadas | não se aplica | não se aplica |
 | `README.md` | Apresenta o projeto no GitHub. | não se aplica | 1 | não se aplica |
 | `docs/especificacao.md` | Guarda as regras do jogo, as telas, a lista de tarefas e este mapa. | tarefas na seção 10, mapa na seção 12 | não se aplica | não se aplica |
 | `docs/planos/*.md` | Guardam um plano por etapa, como registro histórico. Se um plano divergir da especificação, vale a especificação. | nome dos arquivos na regra 13 do `CLAUDE.md` | não se aplica | não se aplica |

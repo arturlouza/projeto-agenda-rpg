@@ -1,3 +1,9 @@
 {
-  "plansDirectory": "./docs/planos"
+  "plansDirectory": "./docs/planos",
+  "permissions": {
+    "deny": [
+      "Read(/**/.env)",
+      "Read(/**/.env.*)"
+    ]
+  }
 }
