@@ -270,11 +270,21 @@ Decisões da revisão de segurança (plano `05.8c-revisao-de-seguranca.md`). Val
 - O banco guarda só o HMAC do token, calculado com `APP_PASSWORD` como chave, com validade de 90 dias. `POST /auth/logout` encerra o aparelho atual.
 - **Emergência (celular perdido, suspeita de invasão):** trocar `APP_PASSWORD` no painel do serviço. Com a chave nova, nenhum token antigo é reconhecido. Não depende de login nem de rota. Nunca voltar a uma senha já usada: os tokens antigos não expirados valeriam de novo.
 - 10 erros de login em 15 minutos fazem o login responder 429. O contador é global e fica em memória, então o reinício do serviço o zera. Tokens válidos continuam funcionando.
-- Todo POST, PUT, PATCH e DELETE com `Origin` diferente do endereço do app é recusado com 403 (proteção contra CSRF). A conferência é global e vale para as rotas futuras.
 - Toda rota exige token, menos `/health` e `/auth/login`. Um teste percorre as rotas e garante isso.
 - Pedidos acima de 64 KB são recusados, exceto a restauração, que tem limite próprio.
 
-**Modo de execução:** a variável `APP_ENV` escolhe o modo. Sem ela, vale produção: sem `/docs`, `/redoc` e `/openapi.json`, com senha e `DATABASE_URL` obrigatórias e TLS exigido na conexão com o PostgreSQL. `debug` é sempre falso. `--reload` só no computador.
+**Conferência de `Origin` (proteção contra CSRF), decidida no plano `05.8d-origin-sem-cabecalho.md`:**
+
+- Todo pedido que não seja `GET`, `HEAD` ou `OPTIONS` (na prática, POST, PUT, PATCH e DELETE) só passa com `Origin` exatamente igual ao endereço do app. Qualquer outro caso recebe 403: cabeçalho ausente, valor `null` ou outro endereço.
+- A conferência é global, vale para as rotas futuras e para `/auth/login`, e roda antes do token e antes de ler o corpo. O 403 vem antes do 401, a rota não executa, e o login recusado aqui não conta como tentativa.
+- O endereço vem da variável `APP_ORIGIN`, nunca do `Host` nem de `X-Forwarded-*`. O valor traz esquema, domínio e porta, em minúsculas, sem barra no fim, sem caminho e sem a porta padrão. Não é segredo. Fora do desenvolvimento, ele é obrigatório e em `https://`. Sem ele, ou com formato inválido, o app recusa subir.
+- Em desenvolvimento, sem a variável, valem `http://localhost:8000` e `http://127.0.0.1:8000`. Com a variável, vale só ela. O teste por USB abre `http://localhost:8000` e não precisa de ajuste.
+- As escritas do front-end usam `fetch` com o modo padrão. Nada de `<form>` com POST, outro `mode` ou `sendBeacon`: com `Referrer-Policy: no-referrer`, o navegador manda `Origin: null` nesses casos, e o pedido recebe 403.
+- A conferência protege contra outro site usando o seu navegador. Não barra script nem robô, que escrevem o `Origin` que quiserem: contra eles, a proteção é a senha. Comandos manuais, como `curl`, precisam mandar `Origin`.
+- Nenhuma rota `GET`, `HEAD` ou `OPTIONS` altera dados, porque a conferência não as cobre. Um teste percorre os `GET` e reprova qualquer instrução além de leitura no banco. Ele não vê escritas em condições que não criou nem efeitos fora do banco, então cada rota nova também é revisada.
+- Nenhuma rota usa `include_in_schema=False`: ela sumiria de `app.openapi()`, que é de onde os testes tiram a lista de rotas. Um teste confere.
+
+**Modo de execução:** a variável `APP_ENV` escolhe o modo. Sem ela, vale produção: sem `/docs`, `/redoc` e `/openapi.json`, com senha, `APP_ORIGIN` e `DATABASE_URL` obrigatórias e TLS exigido na conexão com o PostgreSQL. `debug` é sempre falso. `--reload` só no computador.
 
 **Front-end:**
 
@@ -385,7 +395,7 @@ Uma tarefa por sessão do Claude Code. Cada uma termina com o app funcionando, t
 | 12 | Visão da semana em sete colunas, com navegação | Dá para ver a semana inteira e trocar de semana |
 | 13 | Aparência: cor no fundo, moldura e ícone por dificuldade, comemoração de nível | Cada dificuldade é reconhecível de longe |
 | 14 | PWA: `manifest.json`, ícone e service worker | O Chrome reconhece o app como instalável, com o celular ligado por USB em `localhost`; a API não aparece no cache |
-| 15 | Proteção por senha única: login, token em cookie e tela de login (divisão abaixo) | Sem token, a API recusa os pedidos; nada abre sem senha configurada; trocar a senha derruba todos os tokens; pedido de outra origem recebe 403 |
+| 15 | Proteção por senha única: login, token em cookie e tela de login (divisão abaixo) | Sem token, a API recusa os pedidos; nada abre sem senha configurada; trocar a senha derruba todos os tokens; pedido de outra origem, sem `Origin` ou com `Origin: null` recebe 403 |
 | 16 | Dados reais: migrações com Alembic (dependência nova, autorizada nesta tarefa), URL do banco em variável de ambiente, rota e tela de exportação e restauração a partir do arquivo exportado | As migrações criam um banco novo, e exportar, apagar e restaurar devolve os mesmos dados e o mesmo XP total; fora do desenvolvimento, sem `DATABASE_URL`, o app recusa subir |
 | 17 | Publicação: front, back e PostgreSQL num serviço gratuito cujo banco não expira, com o FastAPI entregando o front e sem CORS | O app abre e instala no celular, fora de casa, e passa na conferência da tarefa 17 |
 
@@ -494,16 +504,27 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 
 **Divisão da tarefa 15:**
 
-- **Etapa 15.1, configuração:** `APP_ENV` e `APP_PASSWORD`, com o app recusando subir sem senha válida. O `python-dotenv` entra como dependência nova, autorizada nesta tarefa e só para desenvolvimento, porque o `uvicorn --env-file` exige. O comando passa a ser `uvicorn app.main:app --reload --env-file .env`. Eu escrevo a senha de desenvolvimento no `backend/.env`. Um `conftest.py` define valores falsos para os testes.
-- **Etapa 15.2, proteção no back-end:** login, cookie com o nome `__Host-session`, tabela `AuthSession` com HMAC, contador de tentativas em memória, conferência de `Origin`, limite de tamanho dos pedidos, cabeçalhos (`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` na API) e `/docs`, `/redoc` e `/openapi.json` desligados fora do desenvolvimento. Os clientes de teste passam a usar `base_url="https://testserver"`, senão o cookie `Secure` não volta.
-- **Etapa 15.3, tela:** tela de login, resposta ao 401 e botão de sair. Conferir o cookie no Chrome do celular, por USB. Se ele recusar o prefixo `__Host-` em `localhost`, sai só o prefixo, e os outros atributos ficam.
-- **Testes obrigatórios:**
+- **Etapa 15.1, configuração:** `APP_ENV`, `APP_PASSWORD` e `APP_ORIGIN`, com o app recusando subir sem senha válida ou, fora do desenvolvimento, sem endereço válido (seção 6.7). O `python-dotenv` entra como dependência nova, autorizada nesta tarefa e só para desenvolvimento, porque o `uvicorn --env-file` exige. O comando passa a ser `uvicorn app.main:app --reload --env-file .env`. Eu escrevo a senha de desenvolvimento no `backend/.env`; `APP_ORIGIN` não precisa estar lá. Um `conftest.py` define valores falsos para os testes, com `APP_ORIGIN=https://testserver`.
+- **Etapa 15.2, proteção no back-end:** login, cookie com o nome `__Host-session`, tabela `AuthSession` com HMAC, contador de tentativas em memória, conferência de `Origin` (regras na seção 6.7), limite de tamanho dos pedidos, cabeçalhos (`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` na API) e `/docs`, `/redoc` e `/openapi.json` desligados fora do desenvolvimento. Os clientes de teste passam a vir de uma única fixture no `conftest.py`: `TestClient(app, base_url="https://testserver", headers={"Origin": "https://testserver"})`. Sem o `base_url`, o cookie `Secure` não volta; sem o `Origin`, as escritas dão 403. Teste manual: um POST pelo `/docs` funciona em `localhost:8000` e em `127.0.0.1:8000`.
+- **Etapa 15.3, tela:** tela de login, resposta ao 401 e botão de sair. Conferir o cookie no Chrome do celular, por USB. Se ele recusar o prefixo `__Host-` em `localhost`, sai só o prefixo, e os outros atributos ficam. Conferir também, por USB e com o app instalado, que criar uma tarefa funciona.
+- **Testes obrigatórios da 15.1:** fora do desenvolvimento, o app recusa subir sem `APP_ORIGIN` e com `http://`, barra no fim, caminho, maiúsculas, `:443` ou `null`.
+- **Testes obrigatórios da 15.2:**
   - percorrer `app.openapi()["paths"]` e exigir 401 fora de `/health` e `/auth/login` (`app.routes` não serve nesta versão do FastAPI);
   - senha acentuada não vira erro 500;
   - o token vale antes de trocar a senha, dá 401 depois, e a senha nova entra;
   - a limpeza no login remove só as sessões expiradas;
   - `debug` é falso;
-  - POST sem corpo vindo de outra origem dá 403.
+  - POST sem corpo vindo de outra origem dá 403;
+  - em POST, PUT, PATCH e DELETE: sem `Origin`, com `Origin: null` e com `Origin` de outro endereço dão 403 e não gravam nada; com `Origin` certo, a rota responde normalmente;
+  - `http://testserver`, `https://testserver:8443`, `https://testserver.evil.example`, `https://testserver/` e `HTTPS://TESTSERVER` dão 403;
+  - `Host` e `Origin` iguais, mas de outro endereço, dão 403;
+  - `POST /auth/login` com a senha certa e `Origin` errado dá 403, sem cookie e sem contar tentativa;
+  - POST sem cookie e com `Origin` errado dá 403, não 401;
+  - POST em rota que não existe, com `Origin` errado, dá 403;
+  - `GET` sem `Origin` passa pela conferência;
+  - em desenvolvimento, sem `APP_ORIGIN`, aceita `http://localhost:8000` e `http://127.0.0.1:8000` e recusa `http://localhost:5500`;
+  - percorrer os `GET` de `app.openapi()["paths"]`, com login e banco preenchido, sem nenhuma instrução além de `SELECT` e `PRAGMA` (evento `before_cursor_execute`); parâmetro de rota desconhecido reprova;
+  - `include_in_schema` não aparece em `backend/app/`.
 
 **Detalhes sobre a tarefa 16:**
 
@@ -522,10 +543,10 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 **Detalhes sobre a tarefa 17:**
 
 - **Critérios do serviço, além de o banco não expirar:** regra de inatividade por escrito (pausar é aceitável, apagar não); TLS na conexão com o banco; 2FA na conta; exportação possível; variáveis de ambiente fora dos logs; versão do Python compatível; subdomínio na Public Suffix List ou domínio próprio, por causa do `SameSite`.
-- **Comando de início:** `uvicorn app.main:app --host 0.0.0.0 --port <porta do serviço>`, com 1 processo, sem `--reload` e sem `--env-file`. As migrações rodam no serviço, no início do deploy. Confirmar como o serviço aplica uma variável nova: a troca de senha só vale depois do reinício.
+- **Comando de início:** `uvicorn app.main:app --host 0.0.0.0 --port <porta do serviço>`, com 1 processo, sem `--reload` e sem `--env-file`. As migrações rodam no serviço, no início do deploy. Confirmar como o serviço aplica uma variável nova: a troca de senha só vale depois do reinício. `APP_ORIGIN` fica no painel, com o endereço público final. Mudar de endereço exige mudar a variável, senão toda gravação dá 403.
 - **Antes de publicar:** consulta à base OSV, e nenhuma falha conhecida sem decisão minha.
-- **Conferência sem token, contra o endereço publicado:** `/docs`, `/redoc` e `/openapi.json` dão 404; `/tasks/day/<data>` e `/task-types` dão 401; `/health` responde só o status; `http://` redireciona para `https://`, com HSTS; login errado 11 vezes dá 429, e um token existente continua funcionando; `/.env` e `/agenda.db` dão 404; o log do serviço não mostra título, nota, senha nem endereço do banco.
-- **Conferência com login feito:** o cookie sai com `HttpOnly`, `Secure` e `SameSite=Strict`; POST com `Origin` de outro endereço dá 403, e o app continua gravando pela própria tela, o que também prova que o proxy preserva o endereço; trocar `APP_PASSWORD` no painel faz o token antigo dar 401, e a senha nova entra.
+- **Conferência sem token, contra o endereço publicado:** `/docs`, `/redoc` e `/openapi.json` dão 404; `/tasks/day/<data>` e `/task-types` dão 401; `/health` responde só o status; `http://` redireciona para `https://`, com HSTS; login errado 11 vezes, mandando o `Origin` certo, dá 429 (sem ele, daria 403), e um token existente continua funcionando; `/.env` e `/agenda.db` dão 404; o log do serviço não mostra título, nota, senha nem endereço do banco.
+- **Conferência com login feito:** o cookie sai com `HttpOnly`, `Secure` e `SameSite=Strict`; POST com `Origin` de outro endereço, sem `Origin` e com `Origin: null` dá 403, e o app instalado continua gravando pela própria tela, o que também prova que `APP_ORIGIN` está certa e que o proxy não apaga o cabeçalho; trocar `APP_PASSWORD` no painel faz o token antigo dar 401, e a senha nova entra.
 - **Backup:** exportar de produção e restaurar num banco vazio. Repetir a restauração a cada 3 meses.
 
 ## 11. Fica para depois
