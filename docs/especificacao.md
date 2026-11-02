@@ -22,13 +22,13 @@ Princípios que valem para tudo:
 | Banco de dados | SQLite no desenvolvimento, PostgreSQL em produção |
 | Acesso ao banco | SQLModel (o mesmo código funciona nos dois bancos) |
 | Testes | pytest |
-| Hospedagem | Front no GitHub Pages; back-end num serviço gratuito, escolhido na hora de publicar. Critério obrigatório: um banco gratuito que não expira |
+| Hospedagem | Front e back-end no mesmo serviço gratuito, escolhido na hora de publicar. Critério obrigatório: um banco gratuito que não expira. Os outros critérios estão na tarefa 17 |
 
-Durante o desenvolvimento, o próprio FastAPI entrega os arquivos do front-end, então tudo roda no computador com um único comando. Na publicação, o front vai para o GitHub Pages e o back para o serviço escolhido.
+O próprio FastAPI entrega os arquivos do front-end, no desenvolvimento e em produção. No computador, tudo roda com um único comando. Na publicação, front e API ficam no mesmo endereço, o que dispensa CORS e permite guardar o token num cookie protegido (seção 6.7).
 
-A partir da tarefa 16, a URL do banco vem da variável de ambiente `DATABASE_URL`. Sem a variável, vale o SQLite local, e o desenvolvimento continua rodando com um comando só.
+A partir da tarefa 16, a URL do banco vem da variável de ambiente `DATABASE_URL`. Em desenvolvimento (`APP_ENV=development`), sem a variável, vale o SQLite local. Fora do desenvolvimento, ela é obrigatória, e o app recusa subir sem ela (seção 6.7).
 
-**Atenção:** como não há login, antes de publicar o back-end na internet ele precisa de uma proteção simples (uma senha única guardada em variável de ambiente). Sem isso, qualquer pessoa com o endereço mexeria nos dados.
+**Atenção:** como não há contas de usuário, antes de publicar o back-end na internet ele precisa de uma proteção simples: uma senha única guardada em variável de ambiente, trocada por um token no login. Sem isso, qualquer pessoa com o endereço mexeria nos dados. As regras estão na seção 6.7.
 
 ## 3. Conceitos do jogo
 
@@ -241,9 +241,9 @@ O app segue o horário de Brasília. O fuso fica numa constante única: `APP_TIM
 
 Vale para as tarefas 9 a 14:
 
-- Caminhos relativos em tudo, inclusive no `manifest.json` e no registro do service worker, porque o GitHub Pages publica numa subpasta.
-- O endereço da API fica numa constante única.
-- Todas as chamadas à API passam por uma única função, que na tarefa 15 recebe a senha.
+- Caminhos relativos em tudo, inclusive no `manifest.json` e no registro do service worker, para o app não depender do endereço onde está publicado.
+- O endereço da API fica numa constante única. Como front e API têm a mesma origem, ele é um caminho relativo.
+- Todas as chamadas à API passam por uma única função, que na tarefa 15 passa a tratar a resposta 401 mostrando a tela de login. O cookie com o token vai sozinho (seção 6.7).
 
 A V1 precisa de internet:
 
@@ -254,6 +254,48 @@ A V1 precisa de internet:
 
 - **Ids:** o SQLite reaproveita ids quando os maiores são excluídos (uma tabela vazia volta ao id 1); o PostgreSQL não. Por isso vale a regra de ids da seção 6.1.
 - **Caractere NUL:** o PostgreSQL recusa o caractere NUL (`\u0000`) em texto; o SQLite aceita. A validação que resolve isso é item obrigatório da tarefa 16.
+
+### 6.7 Segurança
+
+Decisões da revisão de segurança (plano `05.8c-revisao-de-seguranca.md`). Valem para as tarefas 9 a 17.
+
+**Publicação só com tudo pronto:** o back-end não vai ao ar antes da tarefa 15 e só fica no ar depois de passar na conferência da tarefa 17. O endereço será público, e a proteção é a senha.
+
+**Senha e acesso:**
+
+- A senha fica só na variável de ambiente `APP_PASSWORD`. Sem ela, ou com menos de 16 caracteres, o app recusa subir. A senha de desenvolvimento nunca é a de produção.
+- `POST /auth/login` recebe a senha no corpo e entrega um token aleatório. A senha nunca vai na URL e nunca é guardada pelo app no celular.
+- O token fica num cookie `HttpOnly`, `Secure`, `SameSite=Strict`, sem `Domain`, e nunca aparece no corpo da resposta. Esse caminho só é possível porque front e API têm a mesma origem.
+- A comparação usa `secrets.compare_digest` sobre bytes.
+- O banco guarda só o HMAC do token, calculado com `APP_PASSWORD` como chave, com validade de 90 dias. `POST /auth/logout` encerra o aparelho atual.
+- **Emergência (celular perdido, suspeita de invasão):** trocar `APP_PASSWORD` no painel do serviço. Com a chave nova, nenhum token antigo é reconhecido. Não depende de login nem de rota. Nunca voltar a uma senha já usada: os tokens antigos não expirados valeriam de novo.
+- 10 erros de login em 15 minutos fazem o login responder 429. O contador é global e fica em memória, então o reinício do serviço o zera. Tokens válidos continuam funcionando.
+- Todo POST, PUT, PATCH e DELETE com `Origin` diferente do endereço do app é recusado com 403 (proteção contra CSRF). A conferência é global e vale para as rotas futuras.
+- Toda rota exige token, menos `/health` e `/auth/login`. Um teste percorre as rotas e garante isso.
+- Pedidos acima de 64 KB são recusados, exceto a restauração, que tem limite próprio.
+
+**Modo de execução:** a variável `APP_ENV` escolhe o modo. Sem ela, vale produção: sem `/docs`, `/redoc` e `/openapi.json`, com senha e `DATABASE_URL` obrigatórias e TLS exigido na conexão com o PostgreSQL. `debug` é sempre falso. `--reload` só no computador.
+
+**Front-end:**
+
+- Dados entram na tela só por `textContent` ou `value`. Nunca por `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write` ou `eval`. Um teste confere.
+- Nenhum script, estilo ou fonte de outro endereço. A Content-Security-Policy fica ligada desde a tarefa 9.
+- O service worker guarda uma lista fechada de arquivos do app e nunca intercepta a API. As respostas da API têm `Cache-Control: no-store`.
+
+**Teste no celular antes da publicação:** pelo cabo USB, com o encaminhamento de porta do Chrome (`chrome://inspect/#devices`), abrindo `http://localhost:8000`. `localhost` é origem segura, então o service worker, a instalação e o cookie `Secure` funcionam. Pelo Wi-Fi, só até a tarefa 15, só em casa, com a rede marcada como privada no Windows, dados de teste e o servidor desligado ao terminar. Depois da tarefa 15, só por USB.
+
+**Banco e backup:**
+
+- A `DATABASE_URL` de produção fica só no painel do serviço, nunca no computador nem em `alembic.ini`. As migrações rodam no serviço.
+- Os logs não mostram os valores gravados (`hide_parameters=True`).
+- Os testes nunca usam a `DATABASE_URL` do ambiente.
+- O backup de verdade é o arquivo exportado. Fica na nuvem pessoal com 2FA e no computador, fora do repositório. Nunca no Git nem em GitHub Actions.
+- A restauração só aceita banco vazio, em uma transação, com as mesmas validações das rotas (menos a da data nova).
+- Exportar antes de toda migração em produção.
+
+**O app não é cofre:** nada de senhas, dados de cartão ou números de documento em títulos e notas.
+
+**Dependências:** Dependabot ligado no GitHub, todas as versões de produção fixadas, consulta à base OSV antes de publicar e uma vez por mês.
 
 ## 7. Versão 2 em detalhe: tarefas repetidas
 
@@ -337,15 +379,15 @@ Uma tarefa por sessão do Claude Code. Cada uma termina com o app funcionando, t
 | 6 | Concluir e desmarcar tarefa, gerando e devolvendo XP no histórico | Concluir e desmarcar deixa o XP total igual ao de antes |
 | 7 | Rota do botão Adiar, reaproveitando a regra de mudança de data e a trava feitas na tarefa 5 | Os testes cobrem 0, 1, 2, 3 e 4 adiamentos |
 | 8 | API do jogador: XP total, nível e progresso da barra | `/player` devolve nível e porcentagem corretos |
-| 9 | Front-end base entregue pelo FastAPI, com o topo de nível e barra de XP | A página abre no navegador mostrando o nível real |
+| 9 | Front-end base entregue pelo FastAPI, com o topo de nível e barra de XP | A página abre no navegador mostrando o nível real; `/agenda.db` e `/.env` dão 404; a CSP está ligada; um teste recusa `innerHTML` e parecidos |
 | 10 | Visão do dia, com atrasadas em destaque | Dá para ver, concluir e desmarcar as tarefas do dia |
 | 11 | Formulário de criar e editar tarefa | Dá para criar uma tarefa completa pela tela |
 | 12 | Visão da semana em sete colunas, com navegação | Dá para ver a semana inteira e trocar de semana |
 | 13 | Aparência: cor no fundo, moldura e ícone por dificuldade, comemoração de nível | Cada dificuldade é reconhecível de longe |
-| 14 | PWA: `manifest.json`, ícone e service worker | O Chrome reconhece o app como instalável |
-| 15 | Proteção por senha única no back-end | Sem a senha, a API recusa os pedidos |
-| 16 | Dados reais: migrações com Alembic (dependência nova, autorizada nesta tarefa), URL do banco em variável de ambiente, rota de exportação e restauração a partir do arquivo exportado | As migrações criam um banco novo, e exportar, apagar e restaurar devolve os mesmos dados e o mesmo XP total |
-| 17 | Publicação: front no GitHub Pages, back e PostgreSQL num serviço gratuito cujo banco não expira, com o CORS do back liberado para o endereço do GitHub Pages | O app abre e instala no celular, fora de casa |
+| 14 | PWA: `manifest.json`, ícone e service worker | O Chrome reconhece o app como instalável, com o celular ligado por USB em `localhost`; a API não aparece no cache |
+| 15 | Proteção por senha única: login, token em cookie e tela de login (divisão abaixo) | Sem token, a API recusa os pedidos; nada abre sem senha configurada; trocar a senha derruba todos os tokens; pedido de outra origem recebe 403 |
+| 16 | Dados reais: migrações com Alembic (dependência nova, autorizada nesta tarefa), URL do banco em variável de ambiente, rota e tela de exportação e restauração a partir do arquivo exportado | As migrações criam um banco novo, e exportar, apagar e restaurar devolve os mesmos dados e o mesmo XP total; fora do desenvolvimento, sem `DATABASE_URL`, o app recusa subir |
+| 17 | Publicação: front, back e PostgreSQL num serviço gratuito cujo banco não expira, com o FastAPI entregando o front e sem CORS | O app abre e instala no celular, fora de casa, e passa na conferência da tarefa 17 |
 
 **Divisão da tarefa 5:**
 
@@ -440,7 +482,28 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 - Concluir e desmarcar (tarefa 6), rota do Adiar (tarefa 7), front-end (tarefas 9 em diante).
 - Campo que diz à tela se a data está travada: as tarefas 10 e 11 vão precisar dele para bloquear o botão e o formulário sem repetir a regra em JavaScript. Ele entra quando a tela precisar, para não adiantar tarefa.
 
-**Detalhe sobre testar no celular:** antes da publicação, dá para abrir o app no celular Android pelo Wi-Fi de casa (usando o IP do computador), mas o botão de instalar só aparece com HTTPS. A instalação de verdade vem na tarefa 17.
+**Detalhe sobre testar no celular:** antes da publicação, o teste é pelo cabo USB, abrindo `http://localhost:8000` no celular, como explica a seção 6.7. Como `localhost` é origem segura, o service worker e a instalação já podem ser testados assim. A instalação definitiva vem na tarefa 17.
+
+**Segurança nas tarefas 9 a 14 (regras na seção 6.7):**
+
+- **Tarefa 9:** o `StaticFiles` monta só a pasta `frontend/`, depois das rotas da API, valendo também para produção. A CSP vai por cabeçalho: `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'`. Por isso, JavaScript e CSS ficam em arquivos, sem `onclick` no HTML. Um teste do pytest lê os `.js` de `frontend/` e falha se achar `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write` ou `eval`.
+- **Tarefa 10:** título e notas entram por `textContent`. Teste manual: criar uma tarefa com título em forma de HTML e ver que ele aparece como texto.
+- **Tarefa 11:** os campos do formulário usam `value`, o nome do tipo usa `textContent` e a cor usa `style.backgroundColor`.
+- **Tarefas 12 e 13:** a mesma regra. Na 13, fontes e ícones são locais.
+- **Tarefa 14:** o service worker usa uma lista fechada de arquivos e responde só a `GET` dessa lista. API e `/auth` passam direto, sem cache.
+
+**Divisão da tarefa 15:**
+
+- **Etapa 15.1, configuração:** `APP_ENV` e `APP_PASSWORD`, com o app recusando subir sem senha válida. O `python-dotenv` entra como dependência nova, autorizada nesta tarefa e só para desenvolvimento, porque o `uvicorn --env-file` exige. O comando passa a ser `uvicorn app.main:app --reload --env-file .env`. Eu escrevo a senha de desenvolvimento no `backend/.env`. Um `conftest.py` define valores falsos para os testes.
+- **Etapa 15.2, proteção no back-end:** login, cookie com o nome `__Host-session`, tabela `AuthSession` com HMAC, contador de tentativas em memória, conferência de `Origin`, limite de tamanho dos pedidos, cabeçalhos (`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` na API) e `/docs`, `/redoc` e `/openapi.json` desligados fora do desenvolvimento. Os clientes de teste passam a usar `base_url="https://testserver"`, senão o cookie `Secure` não volta.
+- **Etapa 15.3, tela:** tela de login, resposta ao 401 e botão de sair. Conferir o cookie no Chrome do celular, por USB. Se ele recusar o prefixo `__Host-` em `localhost`, sai só o prefixo, e os outros atributos ficam.
+- **Testes obrigatórios:**
+  - percorrer `app.openapi()["paths"]` e exigir 401 fora de `/health` e `/auth/login` (`app.routes` não serve nesta versão do FastAPI);
+  - senha acentuada não vira erro 500;
+  - o token vale antes de trocar a senha, dá 401 depois, e a senha nova entra;
+  - a limpeza no login remove só as sessões expiradas;
+  - `debug` é falso;
+  - POST sem corpo vindo de outra origem dá 403.
 
 **Detalhes sobre a tarefa 16:**
 
@@ -448,8 +511,22 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 - A restauração mantém os `created_at`, de que a ordem depende.
 - A restauração não passa pela regra da data nova, senão tarefas antigas seriam recusadas.
 - A restauração não grava os ids do arquivo: o banco gera ids novos e as referências são traduzidas. Gravar ids à mão não avança o contador do PostgreSQL, e o próximo registro criado colidiria.
-- Substituir tudo ou aceitar só banco vazio é decidido nessa tarefa.
+- A restauração aceita só banco vazio, em uma transação, tudo ou nada, e tem limite de tamanho próprio. Assim, um clique errado ou um token roubado não substitui tudo.
+- Exportar e restaurar têm uma tela simples no app, porque o `/docs` não existe em produção. A tela mostra a data da última exportação e avisa depois de 7 dias.
+- O arquivo exportado não traz a tabela `AuthSession`, e a resposta usa `Cache-Control: no-store`. O nome segue o padrão `agenda-rpg-backup-*.json`, que entra no `.gitignore`.
+- O `requirements.txt` passa a fixar todas as dependências de produção, incluindo as indiretas. `pytest`, `httpx2` e `python-dotenv` vão para um `requirements-dev.txt`.
+- O driver do PostgreSQL ainda não está autorizado: é preciso pedir antes de adicionar.
+- Entram também: `hide_parameters=True`; `alembic.ini` sem endereço do banco; TLS exigido na URL do PostgreSQL (`sslmode=verify-full` se o serviço permitir, `require` no mínimo), com o app recusando subir sem ele; `conftest.py` removendo a `DATABASE_URL` do ambiente dos testes; revisão de cada migração antes de rodar.
 - **Obrigatório antes da publicação:** uma validação única de texto, usada por tipos e tarefas (nome, título e notas), que recusa com 422 o caractere NUL (`\u0000`) e caracteres Unicode inválidos como `\ud800`, com testes. Objetivo: nenhuma entrada de texto pode virar erro 500.
+
+**Detalhes sobre a tarefa 17:**
+
+- **Critérios do serviço, além de o banco não expirar:** regra de inatividade por escrito (pausar é aceitável, apagar não); TLS na conexão com o banco; 2FA na conta; exportação possível; variáveis de ambiente fora dos logs; versão do Python compatível; subdomínio na Public Suffix List ou domínio próprio, por causa do `SameSite`.
+- **Comando de início:** `uvicorn app.main:app --host 0.0.0.0 --port <porta do serviço>`, com 1 processo, sem `--reload` e sem `--env-file`. As migrações rodam no serviço, no início do deploy. Confirmar como o serviço aplica uma variável nova: a troca de senha só vale depois do reinício.
+- **Antes de publicar:** consulta à base OSV, e nenhuma falha conhecida sem decisão minha.
+- **Conferência sem token, contra o endereço publicado:** `/docs`, `/redoc` e `/openapi.json` dão 404; `/tasks/day/<data>` e `/task-types` dão 401; `/health` responde só o status; `http://` redireciona para `https://`, com HSTS; login errado 11 vezes dá 429, e um token existente continua funcionando; `/.env` e `/agenda.db` dão 404; o log do serviço não mostra título, nota, senha nem endereço do banco.
+- **Conferência com login feito:** o cookie sai com `HttpOnly`, `Secure` e `SameSite=Strict`; POST com `Origin` de outro endereço dá 403, e o app continua gravando pela própria tela, o que também prova que o proxy preserva o endereço; trocar `APP_PASSWORD` no painel faz o token antigo dar 401, e a senha nova entra.
+- **Backup:** exportar de produção e restaurar num banco vazio. Repetir a restauração a cada 3 meses.
 
 ## 11. Fica para depois
 
@@ -483,5 +560,5 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | `.claude/settings.json` | Faz o Claude Code salvar os planos em `docs/planos` e bloqueia a leitura do `.env` e das variações. | `plansDirectory`, `permissions.deny` (regra 14 do `CLAUDE.md`) | não se aplica | não se aplica |
 | `CLAUDE.md` | Define como trabalhar comigo, a stack, as convenções e os comandos. | regras 1 a 14, exceções aprovadas | não se aplica | não se aplica |
 | `README.md` | Apresenta o projeto no GitHub. | não se aplica | 1 | não se aplica |
-| `docs/especificacao.md` | Guarda as regras do jogo, as telas, a lista de tarefas e este mapa. | tarefas na seção 10, mapa na seção 12 | não se aplica | não se aplica |
+| `docs/especificacao.md` | Guarda as regras do jogo, as telas, as decisões de segurança, a lista de tarefas e este mapa. | segurança na 6.7, tarefas na seção 10, mapa na seção 12 | não se aplica | não se aplica |
 | `docs/planos/*.md` | Guardam um plano por etapa, como registro histórico. Se um plano divergir da especificação, vale a especificação. | nome dos arquivos na regra 13 do `CLAUDE.md` | não se aplica | não se aplica |
