@@ -23,6 +23,8 @@ Sou dev júnior, em transição de carreira, aprendendo Python e desenvolvimento
 9. **Regras do jogo num lugar só.** Toda regra de XP e nível fica em `backend/app/rules/xp.py`, com os números como constantes no topo do arquivo. Toda regra nova ganha teste no pytest.
 10. **Aprendo revisando.** Você escreve o código; eu leio e reviso cada alteração. Quando eu perguntar sobre um trecho, explique linha por linha, com calma, sem pressupor que eu já sei o conceito.
 11. **Regras não podem prejudicar o projeto.** Se seguir qualquer regra deste arquivo ou da especificação puder causar um problema (bug, comportamento diferente entre desenvolvimento e produção, falha de segurança, código frágil), não siga a regra às cegas nem a quebre em silêncio. Pare, explique o risco, proponha a alternativa e espere a minha decisão. Toda exceção aprovada fica registrada neste arquivo, com o motivo.
+12. **Mapa do código sempre em dia.** Toda etapa que criar, apagar, mover ou renomear um arquivo, ou mudar o que um arquivo faz, atualiza o Mapa do código (seção 12 da especificação) na mesma etapa, antes do meu commit.
+13. **Planos em `docs/planos`.** O plano de cada etapa fica em `docs/planos`. Ao terminar a etapa, antes do meu commit, renomeie o arquivo do plano, com nome em minúsculas e sem acento: `NN-nome-curto.md` para uma tarefa inteira (`06-concluir-e-desmarcar.md`), `NN.E-nome-curto.md` para uma etapa (`05.8-editar-tarefa.md`). Trabalho fora da lista usa o número do que veio antes mais uma letra (`05.8a-mapa-do-codigo.md`); preparação antes da primeira etapa usa `.0` mais uma letra (`05.0a-regras-na-especificacao.md`).
 
 ## Exceções aprovadas
 
@@ -44,22 +46,27 @@ Sou dev júnior, em transição de carreira, aprendendo Python e desenvolvimento
 
 ## Estrutura de pastas
 
+O detalhe de cada arquivo está no Mapa do código (seção 12 da especificação). Esta árvore só mostra o desenho das pastas, incluindo o que ainda vai nascer, como `frontend/`.
+
 ```
 .
 ├── CLAUDE.md
 ├── README.md
+├── .claude/
+│   └── settings.json
 ├── docs/
-│   └── especificacao.md
+│   ├── especificacao.md
+│   └── planos/
 ├── backend/
 │   ├── requirements.txt
 │   ├── app/
-│   │   ├── main.py          # cria o app FastAPI e registra as rotas
-│   │   ├── database.py      # conexão com o banco e sessão
-│   │   ├── models.py        # tabelas (SQLModel)
-│   │   ├── dates.py         # fuso de Brasília e "que dia é"
+│   │   ├── main.py
+│   │   ├── database.py
+│   │   ├── models.py
+│   │   ├── dates.py
 │   │   ├── rules/
-│   │   │   └── xp.py        # regras de XP e nível (funções puras)
-│   │   └── routers/         # rotas da API, uma por assunto
+│   │   │   └── xp.py
+│   │   └── routers/
 │   └── tests/
 └── frontend/
     ├── index.html

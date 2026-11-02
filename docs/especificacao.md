@@ -457,3 +457,31 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 - Sincronizar com o Google Agenda.
 - Modo offline (a V1 precisa de internet; ver seção 6.5).
 - Login de várias pessoas, caso um dia o app seja aberto ao público.
+
+## 12. Mapa do código
+
+Serve para achar onde está cada parte do projeto. Lista só o que já existe. Fora do mapa: `agenda.db` e tudo o que está no `.gitignore`.
+
+| Arquivo | O que faz | Funções ou rotas principais | Regras | Teste que protege |
+| --- | --- | --- | --- | --- |
+| `backend/app/main.py` | Cria o app FastAPI, cria o banco ao iniciar e registra as rotas. | `lifespan`, `GET /health` | 2 | `test_health.py`, `test_database.py` |
+| `backend/app/database.py` | Conecta ao banco, entrega a sessão e liga as chaves estrangeiras no SQLite. | `DATABASE_URL`, `create_db_and_tables`, `get_session`, `enable_sqlite_foreign_keys` | 2, 6.6 | `test_database.py` |
+| `backend/app/models.py` | Define as três tabelas do banco. | `TaskType`, `Task`, `XpEntry`, `utc_now`, `DEFAULT_TASK_COLOR` | 6.1, 6.4 | `test_database.py` |
+| `backend/app/dates.py` | Responde "que dia é" no horário de Brasília. | `APP_TIMEZONE`, `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4, 6.2 | `test_dates.py` |
+| `backend/app/rules/xp.py` | Guarda as regras de XP, adiamento e nível, com os números no topo. | `task_xp`, `effective_postponements`, `is_due_date_locked`, `postponements_after_date_change`, `xp_to_next_level`, `level_from_total_xp` | 4.1, 4.2, 4.5 | `test_xp.py` |
+| `backend/app/routers/task_types.py` | API dos tipos de tarefa; também define `SessionDep` e `MAX_ID`, usados em `tasks.py`. | `POST /task-types`, `GET /task-types`, `PATCH /task-types/{task_type_id}`, `DELETE /task-types/{task_type_id}` | 6.1, 6.6 | `test_task_types.py` |
+| `backend/app/routers/tasks.py` | API das tarefas: criar, listar por dia e semana, editar e excluir. | `POST /tasks`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}` | 6.1, 6.2, 4.3 | `test_tasks.py` |
+| `backend/tests/test_health.py` | Testa a rota `/health`. | `test_health_returns_ok` | 10 (tarefa 1) | não se aplica |
+| `backend/tests/test_database.py` | Testa a criação das tabelas ao iniciar, os valores padrão e a chave estrangeira. | `test_app_startup_creates_tables`, `test_task_with_unknown_task_type_is_refused` | 6.1 | não se aplica |
+| `backend/tests/test_dates.py` | Testa o fuso, o "hoje", os limites do dia e a semana. | testes de `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4 | não se aplica |
+| `backend/tests/test_xp.py` | Testa XP, adiamentos, trava da data e níveis. | testes de cada função de `xp.py` | 4.1, 4.2, 4.5 | não se aplica |
+| `backend/tests/test_task_types.py` | Testa a API dos tipos de tarefa. | testes de criar, listar, renomear e excluir | 6.1 | não se aplica |
+| `backend/tests/test_tasks.py` | Testa a API das tarefas. | auxiliares `insert_task`, `insert_xp_entry`, `update_data` | 6.1, 6.2, 4.3 | não se aplica |
+| `backend/requirements.txt` | Fixa as versões das dependências. | não se aplica | 2 | não se aplica |
+| `backend/pytest.ini` | Faz o pytest encontrar a pasta `app`. | `pythonpath` | não se aplica | não se aplica |
+| `.gitignore` | Diz o que fica fora do Git. | não se aplica | não se aplica | não se aplica |
+| `.claude/settings.json` | Faz o Claude Code salvar os planos em `docs/planos`. | `plansDirectory` | não se aplica | não se aplica |
+| `CLAUDE.md` | Define como trabalhar comigo, a stack, as convenções e os comandos. | regras 1 a 13, exceções aprovadas | não se aplica | não se aplica |
+| `README.md` | Apresenta o projeto no GitHub. | não se aplica | 1 | não se aplica |
+| `docs/especificacao.md` | Guarda as regras do jogo, as telas, a lista de tarefas e este mapa. | tarefas na seção 10, mapa na seção 12 | não se aplica | não se aplica |
+| `docs/planos/*.md` | Guardam um plano por etapa, como registro histórico. Se um plano divergir da especificação, vale a especificação. | nome dos arquivos na regra 13 do `CLAUDE.md` | não se aplica | não se aplica |
