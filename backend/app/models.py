@@ -13,6 +13,10 @@ def utc_now() -> datetime:
 
 # Etiqueta livre que diz o que a tarefa é: Leitura, Treino, Estudo.
 class TaskType(SQLModel, table=True):
+    # Faz o SQLite não reaproveitar o id de uma linha excluída, como o PostgreSQL. Só o SQLite
+    # lê esta opção; no PostgreSQL ela não tem efeito (seção 6.6 da especificação).
+    __table_args__ = {"sqlite_autoincrement": True}
+
     id: int | None = Field(default=None, primary_key=True)
     name: str
     created_at: datetime = Field(default_factory=utc_now)
@@ -20,6 +24,9 @@ class TaskType(SQLModel, table=True):
 
 # Algo a fazer num dia.
 class Task(SQLModel, table=True):
+    # Mesmo motivo do TaskType.
+    __table_args__ = {"sqlite_autoincrement": True}
+
     id: int | None = Field(default=None, primary_key=True)
     title: str
     notes: str | None = None
@@ -35,6 +42,9 @@ class Task(SQLModel, table=True):
 
 # Uma linha do histórico de XP. O XP total é a soma de todas as linhas.
 class XpEntry(SQLModel, table=True):
+    # Mesmo motivo do TaskType.
+    __table_args__ = {"sqlite_autoincrement": True}
+
     id: int | None = Field(default=None, primary_key=True)
     amount: int
     reason: str

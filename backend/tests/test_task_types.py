@@ -1,33 +1,17 @@
 from datetime import date, datetime, timezone
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session
 
-from app.database import get_session
-from app.main import app
 from app.models import Task, TaskType
 
-
-# Banco em arquivo na pasta temporária do pytest, para nunca tocar no agenda.db real.
-@pytest.fixture
-def test_engine(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path}/test.db")
-    SQLModel.metadata.create_all(engine)
-    yield engine
-    engine.dispose()
-
-
-# Cliente da API que usa o banco de teste no lugar do banco real.
-@pytest.fixture
-def client(test_engine):
-    def get_test_session():
-        with Session(test_engine) as session:
-            yield session
-
-    app.dependency_overrides[get_session] = get_test_session
-    yield TestClient(app)
-    app.dependency_overrides.clear()
+# Campos que o pedido não pode mandar. O id e o created_at existem no tipo, mas quem os define
+# é o app.
+UNKNOWN_FIELDS = [
+    {"id": 123},
+    {"created_at": "2026-11-01T12:00:00Z"},
+    {"nome": "campo errado"},
+]
 
 
 # Cria um tipo pela API e devolve o id dele.
@@ -146,6 +130,14 @@ def test_names_that_differ_only_by_accent_can_coexist(client):
     assert response.status_code == 201
 
 
+@pytest.mark.parametrize("extra_field", UNKNOWN_FIELDS)
+def test_create_refuses_unknown_field(client, extra_field):
+    response = client.post("/task-types", json={"name": "Leitura"} | extra_field)
+
+    assert response.status_code == 422
+    assert client.get("/task-types").json() == []
+
+
 def test_rename_changes_the_name(client):
     task_type_id = create_type(client, "Leitura")
     created_at = client.get("/task-types").json()[0]["created_at"]
@@ -196,6 +188,17 @@ def test_rename_refuses_name_with_51_characters(client):
     assert client.get("/task-types").json()[0]["name"] == "Leitura"
 
 
+@pytest.mark.parametrize("extra_field", UNKNOWN_FIELDS)
+def test_rename_refuses_unknown_field(client, extra_field):
+    task_type_id = create_type(client, "Leitura")
+    before = client.get("/task-types").json()
+
+    response = client.patch(f"/task-types/{task_type_id}", json={"name": "Estudo"} | extra_field)
+
+    assert response.status_code == 422
+    assert client.get("/task-types").json() == before
+
+
 def test_rename_unknown_type_returns_404(client):
     response = client.patch("/task-types/999", json={"name": "Estudo"})
 
@@ -222,6 +225,15 @@ def test_delete_removes_unused_type(client):
 
     assert response.status_code == 204
     assert client.get("/task-types").json() == []
+
+
+# Confere uma garantia do banco (seção 6.6). O código do app não pode contar com isso.
+def test_new_type_does_not_reuse_id_of_deleted_type(client):
+    create_type(client, "Leitura")
+    largest_id = create_type(client, "Treino")
+    assert client.delete(f"/task-types/{largest_id}").status_code == 204
+
+    assert create_type(client, "Estudo") != largest_id
 
 
 def test_delete_unknown_type_returns_404(client):

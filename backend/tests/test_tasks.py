@@ -2,11 +2,8 @@ from datetime import date, datetime, timezone
 from typing import get_args
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlmodel import Session, SQLModel, create_engine, select
+from sqlmodel import Session, select
 
-from app.database import get_session
-from app.main import app
 from app.models import DEFAULT_TASK_COLOR, Task, XpEntry
 from app.routers.tasks import Difficulty
 from app.rules.xp import TASK_BASE_XP
@@ -22,27 +19,6 @@ COMPLETED_FIELDS = {
     "completed": True,
     "completed_at": datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
 }
-
-
-# Banco em arquivo na pasta temporária do pytest, para nunca tocar no agenda.db real.
-@pytest.fixture
-def test_engine(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path}/test.db")
-    SQLModel.metadata.create_all(engine)
-    yield engine
-    engine.dispose()
-
-
-# Cliente da API que usa o banco de teste no lugar do banco real.
-@pytest.fixture
-def client(test_engine):
-    def get_test_session():
-        with Session(test_engine) as session:
-            yield session
-
-    app.dependency_overrides[get_session] = get_test_session
-    yield TestClient(app)
-    app.dependency_overrides.clear()
 
 
 # Vale para todos os testes deste arquivo: o "hoje" é sempre 01/11/2026 em Brasília, para
@@ -712,6 +688,15 @@ def test_week_refuses_invalid_date(client, day):
     response = client.get(f"/tasks/week/{day}")
 
     assert response.status_code == 422
+
+
+# Confere uma garantia do banco (seção 6.6). O código do app não pode contar com isso.
+def test_new_task_does_not_reuse_id_of_deleted_task(client):
+    create_task(client)
+    largest_id = create_task(client)["id"]
+    assert client.delete(f"/tasks/{largest_id}").status_code == 204
+
+    assert create_task(client)["id"] != largest_id
 
 
 def test_delete_removes_the_task(client, test_engine):

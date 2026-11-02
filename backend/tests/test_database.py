@@ -3,37 +3,34 @@ from datetime import date
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import inspect
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, SQLModel, create_engine
+from sqlalchemy.schema import CreateTable
+from sqlmodel import Session
 
 from app.main import app
-from app.models import DEFAULT_TASK_COLOR, Task, XpEntry
-
-
-# Banco em arquivo na pasta temporária do pytest, para nunca tocar no agenda.db real.
-@pytest.fixture
-def test_engine(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path}/test.db")
-    yield engine
-    engine.dispose()
+from app.models import DEFAULT_TASK_COLOR, Task, TaskType, XpEntry
 
 
 # Sessão aberta num banco de teste que já tem as tabelas criadas.
 @pytest.fixture
 def session(test_engine):
-    SQLModel.metadata.create_all(test_engine)
     with Session(test_engine) as session:
         yield session
 
 
-def test_app_startup_creates_tables(test_engine, monkeypatch):
-    monkeypatch.setattr("app.database.engine", test_engine)
+def test_app_startup_creates_tables(empty_engine, monkeypatch):
+    monkeypatch.setattr("app.database.engine", empty_engine)
+
+    # Sem esta conferência, o teste passaria mesmo com o app sem criar nenhuma tabela, se o
+    # banco já chegasse aqui com elas.
+    assert inspect(empty_engine).get_table_names() == []
 
     # O with faz o TestClient rodar o lifespan, como acontece ao ligar o app de verdade.
     with TestClient(app):
         pass
 
-    assert set(inspect(test_engine).get_table_names()) == {"task", "tasktype", "xpentry"}
+    assert set(inspect(empty_engine).get_table_names()) == {"task", "tasktype", "xpentry"}
 
 
 def test_task_gets_default_values(session):
@@ -81,3 +78,21 @@ def test_task_with_unknown_task_type_is_refused(session):
 
     with pytest.raises(IntegrityError):
         session.commit()
+
+
+def test_xp_entry_with_unknown_task_is_refused(session):
+    entry = XpEntry(amount=10, reason="Tarefa concluída", task_id=999)
+    session.add(entry)
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+# O texto de criação da tabela é gerado sem conectar a um banco, então dá para conferir o do
+# PostgreSQL sem instalar nada. Cobre também o XpEntry, que não tem rota de exclusão.
+@pytest.mark.parametrize("model", [TaskType, Task, XpEntry])
+def test_autoincrement_exists_only_on_sqlite(model):
+    create_table = CreateTable(model.__table__)
+
+    assert "AUTOINCREMENT" in str(create_table.compile(dialect=sqlite.dialect()))
+    assert "AUTOINCREMENT" not in str(create_table.compile(dialect=postgresql.dialect()))

@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
-from pydantic import StringConstraints
+from pydantic import ConfigDict, StringConstraints
 from sqlmodel import Session, SQLModel, select
 
 from app.database import get_session
@@ -26,6 +26,9 @@ TaskTypeId = Annotated[int, Path(ge=1, le=MAX_ID)]
 # O que a API recebe ao criar ou renomear. Tira os espaços das pontas e recusa nome vazio
 # ou longo demais. É separada de TaskType porque modelos com table=True não validam os dados.
 class TaskTypeInput(SQLModel):
+    # Campo desconhecido é recusado, então o pedido não escolhe id nem created_at.
+    model_config = ConfigDict(extra="forbid")
+
     name: Annotated[
         str,
         StringConstraints(

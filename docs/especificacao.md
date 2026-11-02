@@ -78,7 +78,7 @@ Em código: `adiamentos_efetivos = adiamentos_manuais + dias_de_atraso`. Se for 
 
 Desmarcar uma tarefa concluída devolve exatamente o XP que ela deu. Assim não dá para "farmar" XP marcando e desmarcando.
 
-Excluir uma tarefa concluída mantém no histórico o XP que ela deu. Para remover esse XP, é preciso desmarcar a tarefa antes de excluir. Ao excluir a tarefa, as linhas dela no histórico ficam com `task_id` nulo: a chave estrangeira recusaria a exclusão, e um id solto poderia apontar para outra tarefa quando o SQLite reaproveitasse o número (seção 6.6).
+Excluir uma tarefa concluída mantém no histórico o XP que ela deu. Para remover esse XP, é preciso desmarcar a tarefa antes de excluir. Ao excluir a tarefa, as linhas dela no histórico ficam com `task_id` nulo: a chave estrangeira recusaria a exclusão, e um id solto apontaria para uma tarefa que não existe mais.
 
 ### 4.4 Histórico de XP
 
@@ -174,7 +174,9 @@ O nível e o XP do jogador não são tabelas: são calculados a partir do `XpEnt
 
 Na prática, a trava da seção 4.2 faz o campo `postponements` parar em 3: a data só muda com até 2 adiamentos efetivos, e a conta nova dá no máximo `2 + 1 = 3`. O que passa de 3 são os adiamentos efetivos (manuais + dias de atraso).
 
-**Ids:** o id de cada registro é só um identificador, não é contagem nem ordem. Nenhum código, teste ou tela pode depender de o id ser sequencial, sem buracos ou nunca reaproveitado (seção 6.6).
+**Ids:** o id de cada registro é só um identificador, não é contagem nem ordem. Nenhum código, teste ou tela pode depender de o id ser sequencial, sem buracos ou nunca reaproveitado (seção 6.6). A exceção são os testes que conferem essa garantia do banco, na seção 6.6.
+
+**Tabelas ligadas:** toda tabela nova que aponte para outra tem chave estrangeira e uma regra de exclusão definida, que diz o que acontece com as linhas filhas quando a linha apontada é excluída (ficam com nulo, são excluídas junto ou impedem a exclusão). A chave e a regra têm teste. Hoje: excluir um `TaskType` deixa as tarefas dele sem tipo, e excluir uma `Task` deixa as linhas dela no `XpEntry` com `task_id` nulo.
 
 **Regras dos tipos de tarefa:**
 
@@ -183,6 +185,7 @@ Na prática, a trava da seção 4.2 faz o campo `postponements` parar em 3: a da
 - O nome tem no máximo 50 caracteres, contados depois de remover os espaços do começo e do fim.
 - Ao excluir um tipo usado por tarefas, as tarefas ficam sem tipo; nenhuma tarefa é apagada.
 - Os tipos são listados pela ordem de criação (`created_at`), com o id só como desempate em caso de empate exato.
+- Campo desconhecido no pedido é recusado com 422, inclusive `id` e `created_at`.
 
 **Regras das tarefas:**
 
@@ -252,7 +255,7 @@ A V1 precisa de internet:
 
 ### 6.6 Diferenças conhecidas entre os bancos
 
-- **Ids:** o SQLite reaproveita ids quando os maiores são excluídos (uma tabela vazia volta ao id 1); o PostgreSQL não. Por isso vale a regra de ids da seção 6.1.
+- **Ids:** nos dois bancos, o id de uma linha excluída não volta a ser usado, nem com a tabela vazia. No SQLite, isso vem de `sqlite_autoincrement=True` nos modelos (a palavra `AUTOINCREMENT` na tabela); sem ela, os maiores ids excluídos seriam reaproveitados. No PostgreSQL, vem da sequência da coluna `SERIAL`, e a opção não tem efeito. A garantia vale só dentro do mesmo banco: apagar o `agenda.db` ou restaurar num banco novo recomeça a contagem. E os bancos ainda diferem num ponto: um pedido desfeito (rollback) gasta um número no PostgreSQL e pode não gastar no SQLite, então só o PostgreSQL deixa um buraco nesse caso. Por isso vale a regra de ids da seção 6.1.
 - **Caractere NUL:** o PostgreSQL recusa o caractere NUL (`\u0000`) em texto; o SQLite aceita. A validação que resolve isso é item obrigatório da tarefa 16.
 
 ### 6.7 Segurança
@@ -505,7 +508,7 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 
 **Divisão da tarefa 15:**
 
-- **Etapa 15.1, configuração:** `APP_ENV`, `APP_PASSWORD` e `APP_ORIGIN`, com o app recusando subir sem senha válida ou, fora do desenvolvimento, sem endereço válido (seção 6.7). O `python-dotenv` entra como dependência nova, autorizada nesta tarefa e só para desenvolvimento, porque o `uvicorn --env-file` exige. O comando passa a ser `uvicorn app.main:app --reload --env-file .env`. Eu escrevo a senha de desenvolvimento no `backend/.env`; `APP_ORIGIN` não precisa estar lá. Um `conftest.py` define valores falsos para os testes, com `APP_ORIGIN=https://testserver`.
+- **Etapa 15.1, configuração:** `APP_ENV`, `APP_PASSWORD` e `APP_ORIGIN`, com o app recusando subir sem senha válida ou, fora do desenvolvimento, sem endereço válido (seção 6.7). O `python-dotenv` entra como dependência nova, autorizada nesta tarefa e só para desenvolvimento, porque o `uvicorn --env-file` exige. O comando passa a ser `uvicorn app.main:app --reload --env-file .env`. Eu escrevo a senha de desenvolvimento no `backend/.env`; `APP_ORIGIN` não precisa estar lá. O `conftest.py` passa a definir valores falsos para os testes, antes de importar o app, com `APP_ORIGIN=https://testserver`.
 - **Etapa 15.2, proteção no back-end:** login, cookie com o nome `__Host-session`, tabela `AuthSession` com HMAC, contador de tentativas em memória, conferência de `Origin` (regras na seção 6.7), limite de tamanho dos pedidos, cabeçalhos (`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` na API) e `/docs`, `/redoc` e `/openapi.json` desligados fora do desenvolvimento. Os clientes de teste passam a vir de uma única fixture no `conftest.py`: `TestClient(app, base_url="https://testserver", headers={"Origin": "https://testserver"})`. Sem o `base_url`, o cookie `Secure` não volta; sem o `Origin`, as escritas dão 403. Teste manual: um POST pelo `/docs` funciona em `localhost:8000` e em `127.0.0.1:8000`.
 - **Etapa 15.3, tela:** tela de login, resposta ao 401 e botão de sair. Conferir o cookie no Chrome do celular, por USB. Se ele recusar o prefixo `__Host-` em `localhost`, sai só o prefixo, e os outros atributos ficam. Conferir também, por USB e com o app instalado, que criar uma tarefa funciona.
 - **Testes obrigatórios da 15.1:** fora do desenvolvimento, o app recusa subir sem `APP_ORIGIN` e com `http://`, barra no fim, caminho, maiúsculas, `:443` ou `null`.
@@ -530,6 +533,7 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 **Detalhes sobre a tarefa 16:**
 
 - O Alembic passa a criar e alterar as tabelas no lugar do `create_all` ao iniciar o app, porque os dois juntos colidem. O teste `test_app_startup_creates_tables` muda nessa tarefa.
+- A primeira migração precisa manter o `sqlite_autoincrement` das tabelas (seção 6.6). Conferir isso na revisão da migração, porque os testes de id usam `create_all` e não veriam a perda.
 - A restauração mantém os `created_at`, de que a ordem depende.
 - A restauração não passa pela regra da data nova, senão tarefas antigas seriam recusadas.
 - A restauração não grava os ids do arquivo: o banco gera ids novos e as referências são traduzidas. Gravar ids à mão não avança o contador do PostgreSQL, e o próximo registro criado colidiria.
@@ -565,17 +569,18 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | --- | --- | --- | --- | --- |
 | `backend/app/main.py` | Cria o app FastAPI, cria o banco ao iniciar e registra as rotas. | `lifespan`, `GET /health` | 2 | `test_health.py`, `test_database.py` |
 | `backend/app/database.py` | Conecta ao banco, entrega a sessão e liga as chaves estrangeiras no SQLite. | `DATABASE_URL`, `create_db_and_tables`, `get_session`, `enable_sqlite_foreign_keys` | 2, 6.6 | `test_database.py` |
-| `backend/app/models.py` | Define as três tabelas do banco. | `TaskType`, `Task`, `XpEntry`, `utc_now`, `DEFAULT_TASK_COLOR` | 6.1, 6.4 | `test_database.py` |
+| `backend/app/models.py` | Define as três tabelas do banco. | `TaskType`, `Task`, `XpEntry`, `utc_now`, `DEFAULT_TASK_COLOR` | 6.1, 6.4, 6.6 | `test_database.py` |
 | `backend/app/dates.py` | Responde "que dia é" no horário de Brasília. | `APP_TIMEZONE`, `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4, 6.2 | `test_dates.py` |
 | `backend/app/rules/xp.py` | Guarda as regras de XP, adiamento e nível, com os números no topo. | `task_xp`, `effective_postponements`, `is_due_date_locked`, `postponements_after_date_change`, `xp_to_next_level`, `level_from_total_xp` | 4.1, 4.2, 4.5 | `test_xp.py` |
 | `backend/app/routers/task_types.py` | API dos tipos de tarefa; também define `SessionDep` e `MAX_ID`, usados em `tasks.py`. | `POST /task-types`, `GET /task-types`, `PATCH /task-types/{task_type_id}`, `DELETE /task-types/{task_type_id}` | 6.1, 6.6 | `test_task_types.py` |
 | `backend/app/routers/tasks.py` | API das tarefas: criar, listar por dia e semana, editar (inclusive a data) e excluir. | `POST /tasks`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `ensure_date_is_not_past`, `change_due_date` | 6.1, 6.2, 4.2, 4.3 | `test_tasks.py` |
+| `backend/tests/conftest.py` | Reúne o que os testes de banco e de API têm em comum. O pytest carrega este arquivo sozinho. | `empty_engine`, `test_engine`, `client` | não se aplica | não se aplica |
 | `backend/tests/test_health.py` | Testa a rota `/health`. | `test_health_returns_ok` | 10 (tarefa 1) | não se aplica |
-| `backend/tests/test_database.py` | Testa a criação das tabelas ao iniciar, os valores padrão e a chave estrangeira. | `test_app_startup_creates_tables`, `test_task_with_unknown_task_type_is_refused` | 6.1 | não se aplica |
+| `backend/tests/test_database.py` | Testa a criação das tabelas ao iniciar, os valores padrão, as chaves estrangeiras e o AUTOINCREMENT só no SQLite. | `test_app_startup_creates_tables`, `test_task_with_unknown_task_type_is_refused`, `test_xp_entry_with_unknown_task_is_refused`, `test_autoincrement_exists_only_on_sqlite` | 6.1, 6.6 | não se aplica |
 | `backend/tests/test_dates.py` | Testa o fuso, o "hoje", os limites do dia e a semana. | testes de `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4 | não se aplica |
 | `backend/tests/test_xp.py` | Testa XP, adiamentos, trava da data e níveis. | testes de cada função de `xp.py` | 4.1, 4.2, 4.5 | não se aplica |
-| `backend/tests/test_task_types.py` | Testa a API dos tipos de tarefa. | testes de criar, listar, renomear e excluir | 6.1 | não se aplica |
-| `backend/tests/test_tasks.py` | Testa a API das tarefas. | auxiliares `insert_task`, `insert_xp_entry`, `update_data` | 6.1, 6.2, 4.2, 4.3 | não se aplica |
+| `backend/tests/test_task_types.py` | Testa a API dos tipos de tarefa. | testes de criar, listar, renomear e excluir, de campo desconhecido e de id que não volta | 6.1, 6.6 | não se aplica |
+| `backend/tests/test_tasks.py` | Testa a API das tarefas, com o "hoje" fixo em todos os testes do arquivo. | `fixed_today`, auxiliares `insert_task`, `insert_xp_entry`, `update_data` | 6.1, 6.2, 6.6, 4.2, 4.3 | não se aplica |
 | `backend/requirements.txt` | Fixa as versões das dependências. | não se aplica | 2 | não se aplica |
 | `backend/pytest.ini` | Faz o pytest encontrar a pasta `app`. | `pythonpath` | não se aplica | não se aplica |
 | `.gitignore` | Diz o que fica fora do Git. | não se aplica | não se aplica | não se aplica |
