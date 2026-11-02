@@ -56,6 +56,23 @@ def task_xp(difficulty: str, manual_postponements: int, days_late: int) -> int:
     return math.floor(TASK_BASE_XP[difficulty] * multiplier)
 
 
+# Calcula o valor da linha de desmarcar: o negativo da soma das linhas da tarefa. Assim, a soma
+# de uma tarefa pendente é sempre 0, e a de uma concluída é o XP que ela deu (seção 4.3).
+def xp_to_refund(earned_amounts: list[int]) -> int:
+    return -sum(earned_amounts)
+
+
+# Motivo da linha de concluir. Leva o título porque a linha perde o vínculo com a tarefa quando
+# ela é excluída. Nenhum código decide nada lendo este texto (seção 4.4).
+def completion_reason(title: str) -> str:
+    return f"Tarefa concluída: {title}"
+
+
+# Motivo da linha de desmarcar, com a mesma regra da linha de concluir.
+def uncompletion_reason(title: str) -> str:
+    return f"Tarefa desmarcada: {title}"
+
+
 # Calcula o XP necessário para subir do nível informado para o seguinte.
 def xp_to_next_level(level: int) -> int:
     capped_level = min(level, LEVEL_GROWTH_CAP)

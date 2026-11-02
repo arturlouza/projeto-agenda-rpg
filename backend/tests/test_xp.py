@@ -3,12 +3,15 @@ from datetime import date
 import pytest
 
 from app.rules.xp import (
+    completion_reason,
     effective_postponements,
     is_due_date_locked,
     level_from_total_xp,
     postponements_after_date_change,
     task_xp,
+    uncompletion_reason,
     xp_to_next_level,
+    xp_to_refund,
 )
 
 
@@ -135,6 +138,30 @@ def test_moving_date_earlier_does_not_count():
 def test_same_date_on_late_task_does_not_change_counter():
     result = postponements_after_date_change(0, 2, date(2026, 10, 30), date(2026, 10, 30))
     assert result == 0
+
+
+# Cada linha é um histórico de tarefa concluída e o valor que desmarcar grava. A última mostra
+# vários ciclos: só o ganho da conclusão atual ainda não foi devolvido.
+@pytest.mark.parametrize(
+    "earned_amounts, expected_refund",
+    [
+        ([], 0),
+        ([0], 0),
+        ([25], -25),
+        ([25, -25], 0),
+        ([25, -25, 18], -18),
+    ],
+)
+def test_xp_to_refund_is_the_negative_of_the_sum(earned_amounts, expected_refund):
+    assert xp_to_refund(earned_amounts) == expected_refund
+
+
+def test_completion_reason_has_the_task_title():
+    assert completion_reason("Ler 30 páginas") == "Tarefa concluída: Ler 30 páginas"
+
+
+def test_uncompletion_reason_has_the_task_title():
+    assert uncompletion_reason("Ler 30 páginas") == "Tarefa desmarcada: Ler 30 páginas"
 
 
 # Números da tabela 4.5 da especificação.

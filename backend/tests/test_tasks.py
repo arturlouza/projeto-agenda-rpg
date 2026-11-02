@@ -1,10 +1,12 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import get_args
 
 import pytest
+from fastapi import HTTPException
 from sqlmodel import Session, select
 
 from app.models import DEFAULT_TASK_COLOR, Task, XpEntry
+from app.routers import tasks as tasks_router
 from app.routers.tasks import Difficulty
 from app.rules.xp import TASK_BASE_XP
 
@@ -13,6 +15,11 @@ PAST_DATE_MESSAGE = "A data não pode ser anterior a hoje."
 COMPLETED_DIFFICULTY_MESSAGE = "Desmarque a tarefa antes de mudar a dificuldade."
 COMPLETED_DATE_MESSAGE = "Desmarque a tarefa antes de mudar a data."
 LOCKED_DATE_MESSAGE = "A data desta tarefa está travada e não pode mudar."
+ALREADY_COMPLETED_MESSAGE = "A tarefa já está concluída."
+ALREADY_PENDING_MESSAGE = "A tarefa já está pendente."
+
+# As duas ações sobre o estado da tarefa, no fim da rota.
+COMPLETION_ACTIONS = ["complete", "uncomplete"]
 
 # O que uma tarefa inserida no banco precisa ter para estar concluída.
 COMPLETED_FIELDS = {
@@ -21,12 +28,18 @@ COMPLETED_FIELDS = {
 }
 
 
+# Muda o relógio nos dois lugares que leem a hora: o "hoje" de dates.py e o completed_at que
+# tasks.py grava ao concluir.
+def set_now(monkeypatch, moment):
+    monkeypatch.setattr("app.dates.utc_now", lambda: moment)
+    monkeypatch.setattr("app.routers.tasks.utc_now", lambda: moment)
+
+
 # Vale para todos os testes deste arquivo: o "hoje" é sempre 01/11/2026 em Brasília, para
 # nenhum teste depender da data real do computador.
 @pytest.fixture(autouse=True)
 def fixed_today(monkeypatch):
-    fixed_now = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr("app.dates.utc_now", lambda: fixed_now)
+    set_now(monkeypatch, datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc))
 
 
 # Monta uma tarefa válida, só com os campos obrigatórios, mais o que o teste quiser mudar.
@@ -47,8 +60,8 @@ def tasks_in_database(test_engine):
         return list(session.exec(select(Task)).all())
 
 
-# Grava uma tarefa direto no banco e devolve o id dela, porque a API ainda não cria tarefa
-# concluída nem atrasada, e não deixa escolher o id nem o created_at.
+# Grava uma tarefa direto no banco e devolve o id dela, porque a API não cria tarefa atrasada
+# nem já concluída, e não deixa escolher o id, o created_at nem o completed_at.
 def insert_task(test_engine, **fields):
     data = {"title": "Tarefa", "due_date": date(2026, 11, 1), "difficulty": "easy"} | fields
 
@@ -59,7 +72,8 @@ def insert_task(test_engine, **fields):
         return task.id
 
 
-# Grava uma linha de XP direto no banco, porque gerar XP só chega na tarefa 6.
+# Grava uma linha de XP direto no banco, para o teste escolher um valor ou um motivo que a API
+# não geraria.
 def insert_xp_entry(test_engine, amount, reason, task_id):
     with Session(test_engine) as session:
         session.add(XpEntry(amount=amount, reason=reason, task_id=task_id))
@@ -133,6 +147,49 @@ def assert_update_refused(client, test_engine, task_id, data, status_code=422):
 
     assert response.status_code == status_code
     assert [task.model_dump() for task in tasks_in_database(test_engine)] == before
+    return response
+
+
+# Conclui uma tarefa pela API, confere que deu certo e devolve o JSON da resposta.
+def complete_task(client, task_id):
+    response = client.post(f"/tasks/{task_id}/complete")
+    assert response.status_code == 200
+    return response.json()
+
+
+# Desmarca uma tarefa pela API, confere que deu certo e devolve o JSON da resposta.
+def uncomplete_task(client, task_id):
+    response = client.post(f"/tasks/{task_id}/uncomplete")
+    assert response.status_code == 200
+    return response.json()
+
+
+# O XP total é a soma de todas as linhas do histórico (seção 4.4).
+def xp_total(test_engine):
+    return sum(entry.amount for entry in xp_entries_in_database(test_engine))
+
+
+# Devolve os valores das linhas de uma tarefa, sem contar com nenhuma ordem entre elas.
+def task_amounts(test_engine, task_id):
+    entries = xp_entries_in_database(test_engine)
+    return sorted(entry.amount for entry in entries if entry.task_id == task_id)
+
+
+# Foto de tudo o que uma recusa não pode mudar: as tarefas e o histórico.
+def database_snapshot(test_engine):
+    tasks = [task.model_dump() for task in tasks_in_database(test_engine)]
+    entries = [entry.model_dump() for entry in xp_entries_in_database(test_engine)]
+    return tasks, entries
+
+
+# Confere que concluir ou desmarcar foi recusado com o código esperado e que nada foi gravado.
+def assert_completion_refused(client, test_engine, task_id, action, status_code):
+    before = database_snapshot(test_engine)
+
+    response = client.post(f"/tasks/{task_id}/{action}")
+
+    assert response.status_code == status_code
+    assert database_snapshot(test_engine) == before
     return response
 
 
@@ -1355,3 +1412,502 @@ def test_lock_counts_days_late_in_brasilia(client, test_engine, monkeypatch):
     updated = update_task(client, task_id, due_date="2026-11-05")
 
     assert updated["postponements"] == 3
+
+
+def test_complete_returns_the_task_and_the_xp_change(client, test_engine):
+    task_id = insert_task(test_engine, difficulty="medium")
+
+    result = complete_task(client, task_id)
+
+    assert result["xp_change"] == 25
+    assert result["task"]["id"] == task_id
+    assert result["task"]["completed"] is True
+    assert result["task"]["completed_at"] == "2026-11-01T12:00:00Z"
+
+
+def test_complete_saves_the_completion_in_utc(client, test_engine):
+    task_id = insert_task(test_engine)
+
+    complete_task(client, task_id)
+
+    saved_task = tasks_in_database(test_engine)[0]
+    assert saved_task.completed is True
+    assert saved_task.completed_at == datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def test_complete_writes_one_history_line(client, test_engine):
+    task_id = insert_task(test_engine, title="Ler 30 páginas", difficulty="medium")
+
+    complete_task(client, task_id)
+
+    entries = xp_entries_in_database(test_engine)
+    assert [(entry.amount, entry.reason, entry.task_id) for entry in entries] == [
+        (25, "Tarefa concluída: Ler 30 páginas", task_id)
+    ]
+
+
+def test_uncomplete_returns_the_task_and_the_xp_change(client, test_engine):
+    task_id = insert_task(test_engine, difficulty="medium")
+    complete_task(client, task_id)
+
+    result = uncomplete_task(client, task_id)
+
+    assert result["xp_change"] == -25
+    assert result["task"]["id"] == task_id
+    assert result["task"]["completed"] is False
+    assert result["task"]["completed_at"] is None
+
+
+def test_uncomplete_clears_the_completion(client, test_engine):
+    task_id = insert_task(test_engine)
+    complete_task(client, task_id)
+
+    uncomplete_task(client, task_id)
+
+    saved_task = tasks_in_database(test_engine)[0]
+    assert saved_task.completed is False
+    assert saved_task.completed_at is None
+
+
+def test_uncomplete_writes_one_history_line(client, test_engine):
+    task_id = insert_task(test_engine, title="Ler 30 páginas", difficulty="medium")
+    complete_task(client, task_id)
+
+    uncomplete_task(client, task_id)
+
+    entries = xp_entries_in_database(test_engine)
+    assert {(entry.amount, entry.reason, entry.task_id) for entry in entries} == {
+        (25, "Tarefa concluída: Ler 30 páginas", task_id),
+        (-25, "Tarefa desmarcada: Ler 30 páginas", task_id),
+    }
+
+
+# O critério da tarefa 6, com outra tarefa concluída para o total de antes não ser 0. A cada
+# passo, a soma da tarefa é 0 quando ela está pendente e o XP ganho quando está concluída.
+@pytest.mark.parametrize("cycles", [1, 2, 5])
+def test_complete_and_uncomplete_keep_the_total_xp(client, test_engine, cycles):
+    complete_task(client, insert_task(test_engine, difficulty="hard"))
+    task_id = insert_task(test_engine, difficulty="medium")
+    total_before = xp_total(test_engine)
+
+    for _ in range(cycles):
+        complete_task(client, task_id)
+        assert sum(task_amounts(test_engine, task_id)) == 25
+        assert xp_total(test_engine) == total_before + 25
+
+        uncomplete_task(client, task_id)
+        assert sum(task_amounts(test_engine, task_id)) == 0
+        assert xp_total(test_engine) == total_before
+
+
+# Cada linha é um caso: dificuldade, adiamentos efetivos e o XP esperado, seção 4.2.
+@pytest.mark.parametrize(
+    "difficulty, postponements, expected_xp",
+    [
+        ("easy", 0, 10),
+        ("easy", 1, 7),
+        ("easy", 2, 5),
+        ("easy", 3, 2),
+        ("easy", 4, 0),
+        ("medium", 0, 25),
+        ("medium", 1, 18),
+        ("medium", 2, 12),
+        ("medium", 3, 6),
+        ("medium", 4, 0),
+        ("hard", 0, 50),
+        ("hard", 1, 37),
+        ("hard", 2, 25),
+        ("hard", 3, 12),
+        ("hard", 4, 0),
+    ],
+)
+def test_complete_gives_the_xp_of_the_difficulty_and_postponements(
+    client, test_engine, difficulty, postponements, expected_xp
+):
+    task_id = insert_task(test_engine, difficulty=difficulty, postponements=postponements)
+
+    result = complete_task(client, task_id)
+
+    assert result["xp_change"] == expected_xp
+    assert task_amounts(test_engine, task_id) == [expected_xp]
+
+
+# Tarefa média. A primeira linha é a conta do plano: 25 × (1 − 0,25 × 2) = 12,5, que vira 12.
+@pytest.mark.parametrize(
+    "postponements, days_late, expected_xp",
+    [
+        (1, 1, 12),
+        (0, 1, 18),
+        (0, 2, 12),
+        (0, 3, 6),
+        (2, 1, 6),
+        (0, 4, 0),
+        (1, 3, 0),
+    ],
+)
+def test_complete_adds_days_late_to_manual_postponements(
+    client, test_engine, postponements, days_late, expected_xp
+):
+    due_date = date(2026, 11, 1) - timedelta(days=days_late)
+    task_id = insert_task(
+        test_engine, difficulty="medium", postponements=postponements, due_date=due_date
+    )
+
+    assert complete_task(client, task_id)["xp_change"] == expected_xp
+
+
+@pytest.mark.parametrize("due_date", [date(2026, 11, 2), date(2026, 11, 10), date.max])
+def test_complete_before_the_due_date_is_worth_100_percent(client, test_engine, due_date):
+    task_id = insert_task(test_engine, difficulty="medium", due_date=due_date)
+
+    assert complete_task(client, task_id)["xp_change"] == 25
+
+
+# A data futura não desconta os adiamentos manuais: o atraso negativo conta como 0.
+@pytest.mark.parametrize("postponements, expected_xp", [(1, 18), (3, 6)])
+def test_future_date_does_not_cancel_manual_postponements(
+    client, test_engine, postponements, expected_xp
+):
+    task_id = insert_task(
+        test_engine, difficulty="medium", postponements=postponements, due_date=date(2026, 11, 6)
+    )
+
+    assert complete_task(client, task_id)["xp_change"] == expected_xp
+
+
+# Às 02h59 UTC de 01/11 ainda são 23h59 de 31/10 em Brasília, e às 03h00 UTC o dia já virou.
+# Em UTC, os dois horários já seriam 01/11, e a primeira e a terceira linhas dariam outro valor.
+@pytest.mark.parametrize(
+    "now, due_date, expected_xp",
+    [
+        (datetime(2026, 11, 1, 2, 59, tzinfo=timezone.utc), date(2026, 10, 31), 25),
+        (datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc), date(2026, 10, 31), 18),
+        (datetime(2026, 11, 1, 2, 59, tzinfo=timezone.utc), date(2026, 10, 30), 18),
+    ],
+)
+def test_days_late_follow_the_brasilia_day(
+    client, test_engine, monkeypatch, now, due_date, expected_xp
+):
+    set_now(monkeypatch, now)
+    task_id = insert_task(test_engine, difficulty="medium", due_date=due_date)
+
+    assert complete_task(client, task_id)["xp_change"] == expected_xp
+
+
+# Com 4 ou mais adiamentos efetivos, concluir vale 0, mas as linhas existem para mostrar que a
+# tarefa foi concluída e não rendeu nada (seção 4.4).
+def test_task_worth_zero_writes_zero_lines(client, test_engine):
+    task_id = insert_task(test_engine, title="Atrasada", due_date=date(2026, 10, 28))
+
+    completed = complete_task(client, task_id)
+    uncompleted = uncomplete_task(client, task_id)
+
+    assert completed["xp_change"] == 0
+    assert completed["task"]["completed"] is True
+    assert uncompleted["xp_change"] == 0
+    entries = xp_entries_in_database(test_engine)
+    assert {(entry.amount, entry.reason) for entry in entries} == {
+        (0, "Tarefa concluída: Atrasada"),
+        (0, "Tarefa desmarcada: Atrasada"),
+    }
+
+
+# Depois de 5 dias, a tarefa valeria 0: a devolução vem do histórico, não de uma conta nova.
+def test_uncomplete_returns_the_saved_value_days_later(client, test_engine, monkeypatch):
+    task_id = insert_task(test_engine, difficulty="medium")
+    complete_task(client, task_id)
+
+    set_now(monkeypatch, datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc))
+    result = uncomplete_task(client, task_id)
+
+    assert result["xp_change"] == -25
+    assert xp_total(test_engine) == 0
+
+
+# Nenhuma conta de task_xp daria 7 numa tarefa média, então só o histórico explica a devolução.
+def test_uncomplete_reads_the_value_from_the_history(client, test_engine):
+    task_id = insert_task(test_engine, difficulty="medium", **COMPLETED_FIELDS)
+    insert_xp_entry(test_engine, 7, "Tarefa concluída: Tarefa", task_id)
+
+    assert uncomplete_task(client, task_id)["xp_change"] == -7
+    assert xp_total(test_engine) == 0
+
+
+def test_uncomplete_does_not_touch_lines_of_another_task(client, test_engine):
+    task_id = insert_task(test_engine, difficulty="medium")
+    other_id = insert_task(test_engine, difficulty="hard")
+    complete_task(client, task_id)
+    complete_task(client, other_id)
+
+    result = uncomplete_task(client, task_id)
+
+    assert result["xp_change"] == -25
+    assert task_amounts(test_engine, other_id) == [50]
+    assert xp_total(test_engine) == 50
+
+
+def test_complete_and_uncomplete_keep_due_date_and_postponements(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 31), postponements=1)
+
+    completed = complete_task(client, task_id)
+    uncompleted = uncomplete_task(client, task_id)
+
+    for result in [completed, uncompleted]:
+        assert result["task"]["due_date"] == "2026-10-31"
+        assert result["task"]["postponements"] == 1
+
+
+# A concluída às 22h30 de 31/10 em Brasília (01h30 UTC de 01/11) aparece em 31/10. Ao ser
+# desmarcada, volta ao dia marcado, aqui 05/11.
+def test_completed_task_moves_to_the_brasilia_day_and_returns_to_its_due_date(
+    client, test_engine, monkeypatch
+):
+    set_now(monkeypatch, datetime(2026, 11, 1, 1, 30, tzinfo=timezone.utc))
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 5))
+
+    complete_task(client, task_id)
+
+    assert ids(day_tasks(client, "2026-10-31")["completed"]) == [task_id]
+    assert day_tasks(client, "2026-11-01")["completed"] == []
+    assert day_tasks(client, "2026-11-05")["pending"] == []
+    assert week_ids(week_tasks(client, "2026-10-31")) == {"2026-10-31": [task_id]}
+    assert week_ids(week_tasks(client, "2026-11-05")) == {}
+
+    uncomplete_task(client, task_id)
+
+    assert day_tasks(client, "2026-10-31")["completed"] == []
+    assert ids(day_tasks(client, "2026-11-05")["pending"]) == [task_id]
+    assert week_ids(week_tasks(client, "2026-10-31")) == {}
+    assert week_ids(week_tasks(client, "2026-11-05")) == {"2026-11-05": [task_id]}
+
+
+def test_uncompleted_late_task_returns_to_overdue(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 30))
+
+    complete_task(client, task_id)
+    today = day_tasks(client, "2026-11-01")
+    assert today["overdue"] == []
+    assert ids(today["completed"]) == [task_id]
+
+    uncomplete_task(client, task_id)
+    today = day_tasks(client, "2026-11-01")
+    assert ids(today["overdue"]) == [task_id]
+    assert today["completed"] == []
+
+
+# A tabela da decisão 9 do plano: cada volta vale menos, e o total nunca passa do valor atual.
+# Com uma conta nova ao desmarcar, a linha de 02/11 seria −6, e sobrariam 6 XP de graça.
+def test_late_task_is_worth_less_after_each_cycle(client, test_engine, monkeypatch):
+    task_id = insert_task(test_engine, difficulty="medium", due_date=date(2026, 10, 30))
+
+    assert complete_task(client, task_id)["xp_change"] == 12
+    assert xp_total(test_engine) == 12
+
+    set_now(monkeypatch, datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc))
+    assert uncomplete_task(client, task_id)["xp_change"] == -12
+    assert xp_total(test_engine) == 0
+    assert complete_task(client, task_id)["xp_change"] == 6
+    assert xp_total(test_engine) == 6
+
+    set_now(monkeypatch, datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc))
+    assert uncomplete_task(client, task_id)["xp_change"] == -6
+    assert xp_total(test_engine) == 0
+    assert complete_task(client, task_id)["xp_change"] == 0
+    assert xp_total(test_engine) == 0
+
+
+# Marcar e desmarcar várias vezes por dia, em dias seguidos, nunca rende mais que o valor do dia.
+@pytest.mark.parametrize(
+    "day, expected_xp",
+    [(1, 25), (2, 18), (3, 12), (4, 6), (5, 0), (6, 0)],
+)
+def test_cycles_never_give_more_than_the_value_of_the_day(
+    client, test_engine, monkeypatch, day, expected_xp
+):
+    task_id = insert_task(test_engine, difficulty="medium")
+
+    for current_day in range(1, day + 1):
+        set_now(monkeypatch, datetime(2026, 11, current_day, 12, 0, tzinfo=timezone.utc))
+        for _ in range(3):
+            complete_task(client, task_id)
+            uncomplete_task(client, task_id)
+        assert xp_total(test_engine) == 0
+
+    complete_task(client, task_id)
+
+    assert xp_total(test_engine) == expected_xp
+
+
+# Trocar a dificuldade da tarefa pendente é permitido (seção 6.1), mas os valores não se somam.
+def test_changing_difficulty_after_uncomplete_does_not_accumulate_xp(client, test_engine):
+    task_id = insert_task(test_engine, difficulty="easy")
+
+    assert complete_task(client, task_id)["xp_change"] == 10
+    uncomplete_task(client, task_id)
+    update_task(client, task_id, difficulty="hard")
+    assert complete_task(client, task_id)["xp_change"] == 50
+
+    assert xp_total(test_engine) == 50
+
+
+def test_task_completed_by_the_api_refuses_changing_difficulty(client, test_engine):
+    task_id = insert_task(test_engine, difficulty="easy")
+    complete_task(client, task_id)
+
+    response = assert_update_refused(
+        client, test_engine, task_id, update_data(difficulty="hard"), status_code=409
+    )
+
+    assert response.json()["detail"] == COMPLETED_DIFFICULTY_MESSAGE
+
+
+# Seção 4.3: excluir uma tarefa concluída mantém o XP que ela deu.
+def test_deleting_completed_task_keeps_its_xp(client, test_engine):
+    task_id = insert_task(test_engine, title="Ler", difficulty="medium")
+    complete_task(client, task_id)
+
+    assert client.delete(f"/tasks/{task_id}").status_code == 204
+
+    entries = xp_entries_in_database(test_engine)
+    assert [(entry.amount, entry.reason, entry.task_id) for entry in entries] == [
+        (25, "Tarefa concluída: Ler", None)
+    ]
+
+
+# Seção 4.3: para remover o XP, é preciso desmarcar antes de excluir.
+def test_uncompleting_before_deleting_removes_the_xp(client, test_engine):
+    task_id = insert_task(test_engine, difficulty="medium")
+    complete_task(client, task_id)
+    uncomplete_task(client, task_id)
+
+    assert client.delete(f"/tasks/{task_id}").status_code == 204
+
+    assert xp_total(test_engine) == 0
+    assert [entry.task_id for entry in xp_entries_in_database(test_engine)] == [None, None]
+
+
+def test_complete_refuses_completed_task(client, test_engine):
+    task_id = insert_task(test_engine, difficulty="medium")
+    complete_task(client, task_id)
+
+    response = assert_completion_refused(client, test_engine, task_id, "complete", 409)
+
+    assert response.json()["detail"] == ALREADY_COMPLETED_MESSAGE
+    assert task_amounts(test_engine, task_id) == [25]
+
+
+def test_uncomplete_refuses_pending_task(client, test_engine):
+    task_id = insert_task(test_engine)
+
+    response = assert_completion_refused(client, test_engine, task_id, "uncomplete", 409)
+
+    assert response.json()["detail"] == ALREADY_PENDING_MESSAGE
+    assert xp_entries_in_database(test_engine) == []
+
+
+@pytest.mark.parametrize("action", COMPLETION_ACTIONS)
+@pytest.mark.parametrize("task_id", [999, 2147483647])
+def test_completion_of_unknown_task_returns_404(client, test_engine, action, task_id):
+    insert_task(test_engine, id=1)
+
+    assert_completion_refused(client, test_engine, task_id, action, 404)
+
+
+@pytest.mark.parametrize("action", COMPLETION_ACTIONS)
+@pytest.mark.parametrize("task_id", [0, -1, 2147483648, 10**30])
+def test_completion_refuses_id_out_of_range(client, test_engine, action, task_id):
+    insert_task(test_engine, id=1)
+
+    assert_completion_refused(client, test_engine, task_id, action, 422)
+
+
+@pytest.mark.parametrize("action", COMPLETION_ACTIONS)
+def test_completion_of_deleted_task_returns_404(client, test_engine, action):
+    task_id = insert_task(test_engine)
+    assert client.delete(f"/tasks/{task_id}").status_code == 204
+
+    assert_completion_refused(client, test_engine, task_id, action, 404)
+
+
+# Seção 6.7: nenhum GET altera dados, porque a conferência de Origin não cobre o GET.
+@pytest.mark.parametrize("action", COMPLETION_ACTIONS)
+def test_completion_does_not_accept_get(client, test_engine, action):
+    task_id = insert_task(test_engine)
+    before = database_snapshot(test_engine)
+
+    response = client.get(f"/tasks/{task_id}/{action}")
+
+    assert response.status_code == 405
+    assert database_snapshot(test_engine) == before
+
+
+# Reproduz o toque duplo sem depender de threads: a sessão velha lê a tarefa pendente, outro
+# pedido a conclui, e só então a rota roda com a leitura velha. Conferir task.completed em
+# Python deixaria passar e gravaria uma segunda linha. A variável old_task precisa existir: a
+# sessão só guarda a leitura enquanto algo aponta para ela. Sem a variável, a rota leria o
+# valor novo do banco, e o teste passaria mesmo sem a proteção.
+def test_complete_with_an_old_read_gets_409_and_gives_no_xp(client, test_engine):
+    task_id = insert_task(test_engine, difficulty="medium")
+
+    with Session(test_engine) as old_session:
+        old_task = old_session.get(Task, task_id)
+        complete_task(client, task_id)
+        assert old_session.get(Task, task_id).completed is False
+
+        with pytest.raises(HTTPException) as refusal:
+            tasks_router.complete_task(task_id, old_session)
+
+    assert refusal.value.status_code == 409
+    assert old_task.completed is True
+    assert task_amounts(test_engine, task_id) == [25]
+
+
+# O mesmo no desmarcar: sem a proteção, a segunda linha deixaria a soma da tarefa em −25.
+def test_uncomplete_with_an_old_read_gets_409_and_takes_no_xp(client, test_engine):
+    task_id = insert_task(test_engine, difficulty="medium")
+    complete_task(client, task_id)
+
+    with Session(test_engine) as old_session:
+        old_task = old_session.get(Task, task_id)
+        uncomplete_task(client, task_id)
+        assert old_session.get(Task, task_id).completed is True
+
+        with pytest.raises(HTTPException) as refusal:
+            tasks_router.uncomplete_task(task_id, old_session)
+
+    assert refusal.value.status_code == 409
+    assert old_task.completed is False
+    assert task_amounts(test_engine, task_id) == [-25, 25]
+
+
+# A gravação da linha falha depois que a tarefa já mudou. Se a mudança tivesse sido gravada num
+# commit separado, a tarefa ficaria com o estado novo e sem a linha de XP.
+def test_failed_completion_changes_nothing(client, test_engine, monkeypatch):
+    task_id = insert_task(test_engine)
+    before = database_snapshot(test_engine)
+
+    def fail_add(session, instance):
+        raise RuntimeError("Falha simulada")
+
+    monkeypatch.setattr(Session, "add", fail_add)
+
+    with pytest.raises(RuntimeError):
+        client.post(f"/tasks/{task_id}/complete")
+
+    assert database_snapshot(test_engine) == before
+
+
+def test_failed_uncompletion_changes_nothing(client, test_engine, monkeypatch):
+    task_id = insert_task(test_engine)
+    complete_task(client, task_id)
+    before = database_snapshot(test_engine)
+
+    def fail_add(session, instance):
+        raise RuntimeError("Falha simulada")
+
+    monkeypatch.setattr(Session, "add", fail_add)
+
+    with pytest.raises(RuntimeError):
+        client.post(f"/tasks/{task_id}/uncomplete")
+
+    assert database_snapshot(test_engine) == before

@@ -1,14 +1,21 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Path, status
 from pydantic import ConfigDict, StringConstraints, field_validator
-from sqlmodel import Session, SQLModel, and_, or_, select
+from sqlmodel import Session, SQLModel, and_, or_, select, update
 
 from app.dates import app_day_bounds, app_today, week_days
-from app.models import DEFAULT_TASK_COLOR, Task, TaskType, XpEntry
+from app.models import DEFAULT_TASK_COLOR, Task, TaskType, XpEntry, utc_now
 from app.routers.task_types import MAX_ID, SessionDep
-from app.rules.xp import is_due_date_locked, postponements_after_date_change
+from app.rules.xp import (
+    completion_reason,
+    is_due_date_locked,
+    postponements_after_date_change,
+    task_xp,
+    uncompletion_reason,
+    xp_to_refund,
+)
 
 # Tamanhos máximos, contados depois de remover os espaços das pontas.
 MAX_TASK_TITLE_LENGTH = 100
@@ -81,6 +88,12 @@ class WeekDay(SQLModel):
     tasks: list[Task]
 
 
+# O que a API devolve ao concluir ou desmarcar: a tarefa e quanto o XP total mudou.
+class TaskXpChange(SQLModel):
+    task: Task
+    xp_change: int
+
+
 # Busca a tarefa pelo id e responde 404 se ela não existir.
 def get_task_or_404(session: Session, task_id: int) -> Task:
     task = session.get(Task, task_id)
@@ -127,6 +140,26 @@ def change_due_date(task: Task, new_due_date: date) -> None:
         task.postponements, days_late, task.due_date, new_due_date
     )
     task.due_date = new_due_date
+
+
+# Muda o estado numa instrução só, que vale apenas se a tarefa ainda estiver no estado oposto.
+# Dois pedidos ao mesmo tempo, como num toque duplo, não passam os dois: o segundo encontra 0
+# linhas para mudar e recebe 409. Conferir task.completed em Python não protegeria, porque o
+# valor lido pode já estar velho. Quem chama lê o resto da tarefa e do histórico depois daqui
+# e ainda precisa fazer o commit.
+def change_completed(
+    session: Session, task: Task, completed: bool, completed_at: datetime | None, refusal: str
+) -> None:
+    changed_rows = session.exec(
+        update(Task)
+        .where(Task.id == task.id, Task.completed != completed)
+        .values(completed=completed, completed_at=completed_at)
+    ).rowcount
+
+    if changed_rows == 0:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=refusal)
+
+    session.refresh(task)
 
 
 # Filtro das tarefas pendentes de um dia: a pendente aparece no dia marcado. O "== False" é
@@ -272,3 +305,46 @@ def delete_task(task_id: TaskId, session: SessionDep) -> None:
 
     session.delete(task)
     session.commit()
+
+
+# Os dias de atraso usam o dia de Brasília e podem sair negativos, com a data no futuro: as
+# regras de xp.py tratam esse valor como 0. A tarefa e a linha de XP valem só no commit, numa
+# única transação: se algo falhar no meio, nada muda no banco.
+@router.post(
+    "/{task_id}/complete",
+    responses={
+        404: {"description": "Tarefa não encontrada."},
+        409: {"description": "A tarefa já está concluída."},
+    },
+)
+def complete_task(task_id: TaskId, session: SessionDep) -> TaskXpChange:
+    task = get_task_or_404(session, task_id)
+    change_completed(session, task, True, utc_now(), "A tarefa já está concluída.")
+
+    days_late = (app_today() - task.due_date).days
+    amount = task_xp(task.difficulty, task.postponements, days_late)
+    session.add(XpEntry(amount=amount, reason=completion_reason(task.title), task_id=task_id))
+    session.commit()
+    session.refresh(task)
+    return TaskXpChange(task=task, xp_change=amount)
+
+
+# A devolução vem do histórico, não de uma conta nova, porque os dias de atraso mudam com o
+# tempo. Vale a mesma transação única de complete_task.
+@router.post(
+    "/{task_id}/uncomplete",
+    responses={
+        404: {"description": "Tarefa não encontrada."},
+        409: {"description": "A tarefa já está pendente."},
+    },
+)
+def uncomplete_task(task_id: TaskId, session: SessionDep) -> TaskXpChange:
+    task = get_task_or_404(session, task_id)
+    change_completed(session, task, False, None, "A tarefa já está pendente.")
+
+    earned_amounts = session.exec(select(XpEntry.amount).where(XpEntry.task_id == task_id)).all()
+    amount = xp_to_refund(earned_amounts)
+    session.add(XpEntry(amount=amount, reason=uncompletion_reason(task.title), task_id=task_id))
+    session.commit()
+    session.refresh(task)
+    return TaskXpChange(task=task, xp_change=amount)

@@ -78,11 +78,17 @@ Em código: `adiamentos_efetivos = adiamentos_manuais + dias_de_atraso`. Se for 
 
 Desmarcar uma tarefa concluída devolve exatamente o XP que ela deu. Assim não dá para "farmar" XP marcando e desmarcando.
 
+A linha de desmarcar vale o negativo da soma das linhas da tarefa, lidas do histórico. Não é uma conta nova, porque os dias de atraso mudam com o tempo. Assim, em quantos ciclos forem, uma tarefa pendente soma 0 no histórico e uma concluída soma o XP que deu.
+
 Excluir uma tarefa concluída mantém no histórico o XP que ela deu. Para remover esse XP, é preciso desmarcar a tarefa antes de excluir. Ao excluir a tarefa, as linhas dela no histórico ficam com `task_id` nulo: a chave estrangeira recusaria a exclusão, e um id solto apontaria para uma tarefa que não existe mais.
 
 ### 4.4 Histórico de XP
 
 O XP nunca é guardado como um número solto. Cada ganho ou perda vira uma linha no histórico (`XpEntry`), com valor, motivo e tarefa de origem. O XP total é a soma do histórico, e o nível é calculado a partir dele. Isso garante que desmarcar devolva o valor certo e permite auditar de onde veio cada ponto.
+
+- Concluir e desmarcar gravam sempre uma linha, mesmo de valor 0, para mostrar que a tarefa foi concluída e não rendeu nada.
+- O motivo traz o título da tarefa, porque a linha perde o vínculo com ela quando a tarefa é excluída: `Tarefa concluída: Ler 30 páginas` e `Tarefa desmarcada: Ler 30 páginas`. Nenhum código decide nada lendo esse texto.
+- Só as linhas de concluir e desmarcar levam `task_id`. Um bônus da V2 gravado com `task_id` seria devolvido junto ao desmarcar a tarefa.
 
 ### 4.5 Fórmula do nível
 
@@ -207,7 +213,7 @@ Mudanças:
 Recusas:
 
 - **422:** dado inválido, ou seja, os casos da lista de campos, a data nova anterior a hoje e campo desconhecido no pedido.
-- **409:** dado válido, mas o estado da tarefa impede: mudar a data de uma tarefa travada (seção 4.2), ou mudar a dificuldade ou a data de uma tarefa concluída.
+- **409:** dado válido, mas o estado da tarefa impede: mudar a data de uma tarefa travada (seção 4.2), mudar a dificuldade ou a data de uma tarefa concluída, concluir uma tarefa já concluída ou desmarcar uma tarefa pendente.
 - O pedido recusado não grava nada.
 
 ### 6.2 Telas
@@ -496,6 +502,19 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 - Concluir e desmarcar (tarefa 6), rota do Adiar (tarefa 7), front-end (tarefas 9 em diante).
 - Campo que diz à tela se a data está travada: as tarefas 10 e 11 vão precisar dele para bloquear o botão e o formulário sem repetir a regra em JavaScript. Ele entra quando a tela precisar, para não adiantar tarefa.
 
+**Decisões da tarefa 6 (plano `06-concluir-e-desmarcar.md`):**
+
+- **Rotas:** `POST /tasks/{task_id}/complete` e `POST /tasks/{task_id}/uncomplete`, sem corpo. Respondem 200 com `{"task": ..., "xp_change": ...}`. `xp_change` é quanto o XP total mudou: positivo ao concluir, negativo ao desmarcar e 0 numa tarefa que vale 0.
+- **Recusas:** 422 para id fora do intervalo, depois 404 para id desconhecido, depois 409 para o estado da tarefa. O pedido recusado não grava nada.
+- **Toque duplo:** o estado muda num `UPDATE` condicional do SQLModel, que só vale se a tarefa ainda estiver no estado oposto. Ler, conferir `task.completed` e gravar deixaria dois pedidos simultâneos passarem, e a tarefa daria XP em dobro. Foi testado só no SQLite. Conferir com pedidos simultâneos no PostgreSQL quando o driver entrar, na tarefa 16.
+- **Transação única:** a tarefa e a linha do histórico entram no mesmo commit.
+- **Sem brecha:** os adiamentos efetivos nunca diminuem, e a soma de uma tarefa é 0 ou o valor da última conclusão, então marcar e desmarcar nunca rende mais. Editar a dificuldade da tarefa pendente continua permitido (seção 6.1), e os valores não se somam.
+
+**Fora da tarefa 6:**
+
+- XP no cartão da tarefa concluída (seção 6.3): a listagem precisa trazer esse valor. Ele entra quando a tela precisar, para não adiantar tarefa.
+- Resposta 409 na tela: na tarefa 10, o front-end recarrega a lista, porque o 409 só significa que a tela estava desatualizada.
+
 **Detalhe sobre testar no celular:** antes da publicação, o teste é pelo cabo USB, abrindo `http://localhost:8000` no celular, como explica a seção 6.7. Como `localhost` é origem segura, o service worker e a instalação já podem ser testados assim. A instalação definitiva vem na tarefa 17.
 
 **Segurança nas tarefas 9 a 14 (regras na seção 6.7):**
@@ -571,16 +590,16 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | `backend/app/database.py` | Conecta ao banco, entrega a sessão e liga as chaves estrangeiras no SQLite. | `DATABASE_URL`, `create_db_and_tables`, `get_session`, `enable_sqlite_foreign_keys` | 2, 6.6 | `test_database.py` |
 | `backend/app/models.py` | Define as três tabelas do banco. | `TaskType`, `Task`, `XpEntry`, `utc_now`, `DEFAULT_TASK_COLOR` | 6.1, 6.4, 6.6 | `test_database.py` |
 | `backend/app/dates.py` | Responde "que dia é" no horário de Brasília. | `APP_TIMEZONE`, `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4, 6.2 | `test_dates.py` |
-| `backend/app/rules/xp.py` | Guarda as regras de XP, adiamento e nível, com os números no topo. | `task_xp`, `effective_postponements`, `is_due_date_locked`, `postponements_after_date_change`, `xp_to_next_level`, `level_from_total_xp` | 4.1, 4.2, 4.5 | `test_xp.py` |
+| `backend/app/rules/xp.py` | Guarda as regras de XP, adiamento, devolução e nível, com os números no topo, e os textos do histórico. | `task_xp`, `effective_postponements`, `is_due_date_locked`, `postponements_after_date_change`, `xp_to_refund`, `completion_reason`, `uncompletion_reason`, `xp_to_next_level`, `level_from_total_xp` | 4.1, 4.2, 4.3, 4.4, 4.5 | `test_xp.py` |
 | `backend/app/routers/task_types.py` | API dos tipos de tarefa; também define `SessionDep` e `MAX_ID`, usados em `tasks.py`. | `POST /task-types`, `GET /task-types`, `PATCH /task-types/{task_type_id}`, `DELETE /task-types/{task_type_id}` | 6.1, 6.6 | `test_task_types.py` |
-| `backend/app/routers/tasks.py` | API das tarefas: criar, listar por dia e semana, editar (inclusive a data) e excluir. | `POST /tasks`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `ensure_date_is_not_past`, `change_due_date` | 6.1, 6.2, 4.2, 4.3 | `test_tasks.py` |
+| `backend/app/routers/tasks.py` | API das tarefas: criar, listar por dia e semana, editar (inclusive a data), excluir, concluir e desmarcar. | `POST /tasks`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `POST /tasks/{task_id}/complete`, `POST /tasks/{task_id}/uncomplete`, `ensure_date_is_not_past`, `change_due_date`, `change_completed` | 6.1, 6.2, 4.2, 4.3, 4.4 | `test_tasks.py` |
 | `backend/tests/conftest.py` | Reúne o que os testes de banco e de API têm em comum. O pytest carrega este arquivo sozinho. | `empty_engine`, `test_engine`, `client` | não se aplica | não se aplica |
 | `backend/tests/test_health.py` | Testa a rota `/health`. | `test_health_returns_ok` | 10 (tarefa 1) | não se aplica |
 | `backend/tests/test_database.py` | Testa a criação das tabelas ao iniciar, os valores padrão, as chaves estrangeiras e o AUTOINCREMENT só no SQLite. | `test_app_startup_creates_tables`, `test_task_with_unknown_task_type_is_refused`, `test_xp_entry_with_unknown_task_is_refused`, `test_autoincrement_exists_only_on_sqlite` | 6.1, 6.6 | não se aplica |
 | `backend/tests/test_dates.py` | Testa o fuso, o "hoje", os limites do dia e a semana. | testes de `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4 | não se aplica |
-| `backend/tests/test_xp.py` | Testa XP, adiamentos, trava da data e níveis. | testes de cada função de `xp.py` | 4.1, 4.2, 4.5 | não se aplica |
+| `backend/tests/test_xp.py` | Testa XP, adiamentos, trava da data, devolução, textos do histórico e níveis. | testes de cada função de `xp.py` | 4.1, 4.2, 4.3, 4.4, 4.5 | não se aplica |
 | `backend/tests/test_task_types.py` | Testa a API dos tipos de tarefa. | testes de criar, listar, renomear e excluir, de campo desconhecido e de id que não volta | 6.1, 6.6 | não se aplica |
-| `backend/tests/test_tasks.py` | Testa a API das tarefas, com o "hoje" fixo em todos os testes do arquivo. | `fixed_today`, auxiliares `insert_task`, `insert_xp_entry`, `update_data` | 6.1, 6.2, 6.6, 4.2, 4.3 | não se aplica |
+| `backend/tests/test_tasks.py` | Testa a API das tarefas, com o "hoje" fixo em todos os testes do arquivo. | `fixed_today`, auxiliares `set_now`, `insert_task`, `insert_xp_entry`, `update_data`, `complete_task`, `uncomplete_task`, `xp_total` | 6.1, 6.2, 6.6, 4.2, 4.3, 4.4 | não se aplica |
 | `backend/requirements.txt` | Fixa as versões das dependências. | não se aplica | 2 | não se aplica |
 | `backend/pytest.ini` | Faz o pytest encontrar a pasta `app`. | `pythonpath` | não se aplica | não se aplica |
 | `.gitignore` | Diz o que fica fora do Git. | não se aplica | não se aplica | não se aplica |
