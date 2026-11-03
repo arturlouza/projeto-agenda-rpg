@@ -65,6 +65,7 @@ Todos os números ficam como constantes no topo de `backend/app/rules/xp.py`, pa
 - Cada adiamento tira 25%: 1 adiamento vale 75%, 2 valem 50% e 3 valem 25%.
 - Um adiamento acontece de duas formas: quando você muda a data da tarefa para depois, ou quando o dia passa sem ela ser concluída (cada dia de atraso conta como um adiamento).
 - Mudar a data de uma tarefa pendente para depois conta como 1 adiamento, seja pelo botão "Adiar", seja pela edição, para qualquer data nova. Antecipar não conta.
+- O botão "Adiar" manda a tarefa para 1 dia depois da data marcada. Se ela estiver atrasada, manda para amanhã. Em conta: `nova data = o maior entre a data marcada e hoje em Brasília, mais 1 dia`. "Sempre amanhã" foi descartado porque, numa tarefa com data futura, viraria antecipar. Outra data, só pela tela de edição.
 - Ao adiar uma tarefa atrasada, os dias de atraso acumulados até aquele momento são somados ao contador de adiamentos e não se perdem. Exemplo: com 0 adiamentos e 2 dias de atraso, adiar deixa o contador em `0 + 2 + 1 = 3`.
 - **Com 3 ou mais adiamentos efetivos, a data trava:** não pode mais ser mudada por nenhum caminho, nem pelo botão "Adiar", nem pela edição, nem para antecipar. A tarefa só sai da lista se for concluída ou excluída.
 - A tarefa travada vale 25% com exatamente 3 adiamentos efetivos e **perde o XP** com mais de 3: ainda dá para concluí-la, mas ela vale 0.
@@ -213,7 +214,7 @@ Mudanças:
 Recusas:
 
 - **422:** dado inválido, ou seja, os casos da lista de campos, a data nova anterior a hoje e campo desconhecido no pedido.
-- **409:** dado válido, mas o estado da tarefa impede: mudar a data de uma tarefa travada (seção 4.2), mudar a dificuldade ou a data de uma tarefa concluída, concluir uma tarefa já concluída ou desmarcar uma tarefa pendente.
+- **409:** dado válido, mas o estado da tarefa impede: mudar a data de uma tarefa travada (seção 4.2), mudar a dificuldade ou a data de uma tarefa concluída, concluir uma tarefa já concluída, desmarcar uma tarefa pendente, adiar uma tarefa que já está na última data possível (`9999-12-31`) ou adiar com a tela desatualizada.
 - O pedido recusado não grava nada.
 
 ### 6.2 Telas
@@ -490,12 +491,12 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 
 **Etapa 5.9: mudança de data na edição (fecha a tarefa 5)**
 
-- **Entrega:** a edição passa a exigir `due_date`, como os outros campos, com as regras da seção 4.2 e a regra do "mesmo valor". A lógica fica numa função que a tarefa 7 vai reaproveitar. A rota do botão Adiar não entra aqui.
+- **Entrega:** a edição passa a exigir `due_date`, como os outros campos, com as regras da seção 4.2 e a regra do "mesmo valor". A lógica fica numa função, e a tarefa 7 reaproveita as conferências dela. A rota do botão Adiar não entra aqui.
 - **Arquivos:** `app/routers/tasks.py`, `tests/test_tasks.py`, `docs/especificacao.md` (registro das decisões e Mapa do código).
 - **Como testar:** `pytest`. No `/docs`, criar uma tarefa, mudar a data para depois três vezes (`postponements` chega a 3), ver a quarta tentativa dar 409 e ver que editar só o título, mandando a mesma data, ainda funciona.
 - **Pronto quando:** este é o critério da tarefa 5 na tabela, "funciona pelo `/docs` e os testes cobrem as regras". Casos testados: data anterior a hoje dá 422; atrasada com 0 adiamentos e 2 dias de atraso fica com contador 3; antecipar não conta; travada por atraso ou por adiamento manual recusa inclusive antecipar: 409 quando a data nova é hoje ou depois, 422 quando é anterior a hoje, porque o dado é conferido antes do estado; concluída recusa mudar a data (409); travada ou atrasada aceita editar o título; o pedido recusado não grava nada.
 - **Decisão (tomada na etapa 5.8):** quando 422 e 409 se aplicam ao mesmo pedido, vale o 422, porque o dado é conferido antes do estado da tarefa. Por isso, antecipar uma tarefa travada por atraso dá sempre 422: a data dela já é anterior a hoje, então qualquer data mais antiga também é.
-- **Decisão:** `ensure_date_is_not_past` e `change_due_date` ficam em `tasks.py`, e a tarefa 7 chama as duas, nesta ordem. São duas funções porque a conferência do tipo fica entre elas. Elas não vão para `rules/xp.py` porque leem o relógio, alteram a `Task` e respondem com códigos HTTP; as contas continuam em `xp.py`.
+- **Decisão:** `ensure_date_is_not_past` e `change_due_date` ficam em `tasks.py`, e a edição chama as duas, nesta ordem. A tarefa 7 mudou o que estava previsto aqui e não chama nenhuma delas (ver as decisões da tarefa 7). São duas funções porque a conferência do tipo fica entre elas. Elas não vão para `rules/xp.py` porque leem o relógio, alteram a `Task` e respondem com códigos HTTP; as contas continuam em `xp.py`.
 
 **Fora da tarefa 5:**
 
@@ -514,6 +515,21 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 
 - XP no cartão da tarefa concluída (seção 6.3): a listagem precisa trazer esse valor. Ele entra quando a tela precisar, para não adiantar tarefa.
 - Resposta 409 na tela: na tarefa 10, o front-end recarrega a lista, porque o 409 só significa que a tela estava desatualizada.
+
+**Decisões da tarefa 7 (plano `07-botao-adiar.md`):**
+
+- **Rota:** `POST /tasks/{task_id}/postpone`, com o corpo `{"shown_due_date": "AAAA-MM-DD"}`, a data que a tela mostrava. Responde 200 com a tarefa. Não traz `xp_change`, porque adiar não mexe no XP e nada entra no histórico.
+- **A conta:** `postponed_due_date`, em `rules/xp.py`, com o número na constante `POSTPONE_DAYS`. Devolve `None` quando o dia seguinte não existe.
+- **Toque duplo:** o servidor só adia se a tarefa ainda tiver a data enviada. Se não tiver, responde 409, porque a tela estava desatualizada. Assim, o segundo toque não adia de novo (2 dias e −50% em vez de 1 dia e −25%).
+- **Dois pedidos ao mesmo tempo:** a conferência é a condição de um `UPDATE` do SQLModel, que só vale se a tarefa ainda estiver pendente e com aquela data. Para dois Adiar simultâneos, ler, conferir e gravar já daria o resultado certo, porque cada um grava valores absolutos, e não acrescenta linha como na tarefa 6. A condição é necessária para um Adiar junto com um Concluir: sem ela, a tarefa concluída ficaria com a data mudada, contra a seção 6.1. Foi testado só no SQLite. Conferir com pedidos simultâneos no PostgreSQL quando o driver entrar, na tarefa 16.
+- **Reaproveitamento:** a rota usa `ensure_due_date_can_change`, que saiu de `change_due_date` e guarda as conferências de tarefa concluída e de trava, e `postponements_after_date_change`. Não chama `change_due_date`, porque ela grava sem condição. Não chama `ensure_date_is_not_past`, porque a data nova é sempre depois de hoje e ela nunca recusaria. Um teste em `test_xp.py` prova isso.
+- **Última data:** adiar uma tarefa em `9999-12-31` dá 409. O pedido não tem dado inválido: é a data atual da tarefa que não permite adiar. Sem esse cuidado, somar um dia daria `OverflowError` e erro 500.
+- **Ordem das recusas:** primeiro 422 (id fora do intervalo ou corpo inválido), depois 404 e depois os 409, do mais definitivo para o mais passageiro: tarefa concluída, data travada, última data possível e tela desatualizada. Recarregar só resolve o último, então os outros dizem o motivo real. No toque duplo que atinge a trava, o segundo toque recebe a mensagem da trava.
+
+**Fora da tarefa 7:**
+
+- Botão na tela: o front-end manda em `shown_due_date` a data que recebeu da listagem e nunca calcula a data nova. O 409 recarrega a lista, como no Concluir.
+- A edição tem uma brecha parecida, que continua aberta: um `PUT` que muda a data, sobreposto a um Concluir, grava a data numa tarefa concluída; sobreposto a um Adiar, perde um adiamento. É bem menos provável, porque o formulário fica em outra tela. Falta decidir se e quando tratar.
 
 **Detalhe sobre testar no celular:** antes da publicação, o teste é pelo cabo USB, abrindo `http://localhost:8000` no celular, como explica a seção 6.7. Como `localhost` é origem segura, o service worker e a instalação já podem ser testados assim. A instalação definitiva vem na tarefa 17.
 
@@ -590,16 +606,16 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | `backend/app/database.py` | Conecta ao banco, entrega a sessão e liga as chaves estrangeiras no SQLite. | `DATABASE_URL`, `create_db_and_tables`, `get_session`, `enable_sqlite_foreign_keys` | 2, 6.6 | `test_database.py` |
 | `backend/app/models.py` | Define as três tabelas do banco. | `TaskType`, `Task`, `XpEntry`, `utc_now`, `DEFAULT_TASK_COLOR` | 6.1, 6.4, 6.6 | `test_database.py` |
 | `backend/app/dates.py` | Responde "que dia é" no horário de Brasília. | `APP_TIMEZONE`, `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4, 6.2 | `test_dates.py` |
-| `backend/app/rules/xp.py` | Guarda as regras de XP, adiamento, devolução e nível, com os números no topo, e os textos do histórico. | `task_xp`, `effective_postponements`, `is_due_date_locked`, `postponements_after_date_change`, `xp_to_refund`, `completion_reason`, `uncompletion_reason`, `xp_to_next_level`, `level_from_total_xp` | 4.1, 4.2, 4.3, 4.4, 4.5 | `test_xp.py` |
+| `backend/app/rules/xp.py` | Guarda as regras de XP, adiamento, devolução e nível, com os números no topo, e os textos do histórico. | `task_xp`, `effective_postponements`, `is_due_date_locked`, `postponements_after_date_change`, `postponed_due_date`, `xp_to_refund`, `completion_reason`, `uncompletion_reason`, `xp_to_next_level`, `level_from_total_xp` | 4.1, 4.2, 4.3, 4.4, 4.5 | `test_xp.py` |
 | `backend/app/routers/task_types.py` | API dos tipos de tarefa; também define `SessionDep` e `MAX_ID`, usados em `tasks.py`. | `POST /task-types`, `GET /task-types`, `PATCH /task-types/{task_type_id}`, `DELETE /task-types/{task_type_id}` | 6.1, 6.6 | `test_task_types.py` |
-| `backend/app/routers/tasks.py` | API das tarefas: criar, listar por dia e semana, editar (inclusive a data), excluir, concluir e desmarcar. | `POST /tasks`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `POST /tasks/{task_id}/complete`, `POST /tasks/{task_id}/uncomplete`, `ensure_date_is_not_past`, `change_due_date`, `change_completed` | 6.1, 6.2, 4.2, 4.3, 4.4 | `test_tasks.py` |
+| `backend/app/routers/tasks.py` | API das tarefas: criar, listar por dia e semana, editar (inclusive a data), excluir, concluir, desmarcar e adiar. | `POST /tasks`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `POST /tasks/{task_id}/complete`, `POST /tasks/{task_id}/uncomplete`, `POST /tasks/{task_id}/postpone`, `ensure_date_is_not_past`, `ensure_due_date_can_change`, `change_due_date`, `change_completed` | 6.1, 6.2, 4.2, 4.3, 4.4 | `test_tasks.py` |
 | `backend/tests/conftest.py` | Reúne o que os testes de banco e de API têm em comum. O pytest carrega este arquivo sozinho. | `empty_engine`, `test_engine`, `client` | não se aplica | não se aplica |
 | `backend/tests/test_health.py` | Testa a rota `/health`. | `test_health_returns_ok` | 10 (tarefa 1) | não se aplica |
 | `backend/tests/test_database.py` | Testa a criação das tabelas ao iniciar, os valores padrão, as chaves estrangeiras e o AUTOINCREMENT só no SQLite. | `test_app_startup_creates_tables`, `test_task_with_unknown_task_type_is_refused`, `test_xp_entry_with_unknown_task_is_refused`, `test_autoincrement_exists_only_on_sqlite` | 6.1, 6.6 | não se aplica |
 | `backend/tests/test_dates.py` | Testa o fuso, o "hoje", os limites do dia e a semana. | testes de `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4 | não se aplica |
-| `backend/tests/test_xp.py` | Testa XP, adiamentos, trava da data, devolução, textos do histórico e níveis. | testes de cada função de `xp.py` | 4.1, 4.2, 4.3, 4.4, 4.5 | não se aplica |
+| `backend/tests/test_xp.py` | Testa XP, adiamentos, trava da data, data nova do Adiar, devolução, textos do histórico e níveis. | testes de cada função de `xp.py` | 4.1, 4.2, 4.3, 4.4, 4.5 | não se aplica |
 | `backend/tests/test_task_types.py` | Testa a API dos tipos de tarefa. | testes de criar, listar, renomear e excluir, de campo desconhecido e de id que não volta | 6.1, 6.6 | não se aplica |
-| `backend/tests/test_tasks.py` | Testa a API das tarefas, com o "hoje" fixo em todos os testes do arquivo. | `fixed_today`, auxiliares `set_now`, `insert_task`, `insert_xp_entry`, `update_data`, `complete_task`, `uncomplete_task`, `xp_total` | 6.1, 6.2, 6.6, 4.2, 4.3, 4.4 | não se aplica |
+| `backend/tests/test_tasks.py` | Testa a API das tarefas, com o "hoje" fixo em todos os testes do arquivo. | `fixed_today`, auxiliares `set_now`, `insert_task`, `insert_xp_entry`, `update_data`, `complete_task`, `uncomplete_task`, `postpone_task`, `assert_postpone_refused`, `xp_total` | 6.1, 6.2, 6.6, 4.2, 4.3, 4.4 | não se aplica |
 | `backend/requirements.txt` | Fixa as versões das dependências. | não se aplica | 2 | não se aplica |
 | `backend/pytest.ini` | Faz o pytest encontrar a pasta `app`. | `pythonpath` | não se aplica | não se aplica |
 | `.gitignore` | Diz o que fica fora do Git. | não se aplica | não se aplica | não se aplica |

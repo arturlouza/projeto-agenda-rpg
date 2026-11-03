@@ -1,5 +1,5 @@
 import math
-from datetime import date
+from datetime import date, timedelta
 
 # XP de cada dificuldade de tarefa, concluída sem nenhum adiamento.
 TASK_BASE_XP = {"easy": 10, "medium": 25, "hard": 50}
@@ -8,6 +8,9 @@ TASK_BASE_XP = {"easy": 10, "medium": 25, "hard": 50}
 # Com 3 ou mais adiamentos efetivos, a data trava.
 POSTPONEMENT_PENALTY = 0.25
 MAX_POSTPONEMENTS = 3
+
+# O botão Adiar leva a tarefa para este número de dias depois da data marcada.
+POSTPONE_DAYS = 1
 
 # Números da fórmula do nível: 100 + 2 × (nível − 1) ^ 1,5.
 LEVEL_BASE_XP = 100
@@ -43,6 +46,16 @@ def postponements_after_date_change(
         return manual_postponements
 
     return effective_postponements(manual_postponements, days_late) + 1
+
+
+# Calcula a data nova do botão Adiar: 1 dia depois da data marcada. Se a tarefa estiver
+# atrasada, conta a partir de hoje, então ela vai para amanhã. Devolve None se esse dia não
+# existir: o Python não representa nenhuma data depois de 9999-12-31.
+def postponed_due_date(due_date: date, today: date) -> date | None:
+    try:
+        return max(due_date, today) + timedelta(days=POSTPONE_DAYS)
+    except OverflowError:
+        return None
 
 
 # Calcula o XP de uma tarefa, descontando os adiamentos manuais e os dias de atraso.

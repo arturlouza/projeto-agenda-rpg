@@ -17,6 +17,8 @@ COMPLETED_DATE_MESSAGE = "Desmarque a tarefa antes de mudar a data."
 LOCKED_DATE_MESSAGE = "A data desta tarefa está travada e não pode mudar."
 ALREADY_COMPLETED_MESSAGE = "A tarefa já está concluída."
 ALREADY_PENDING_MESSAGE = "A tarefa já está pendente."
+LAST_DATE_MESSAGE = "Esta tarefa já está na última data possível e não pode ser adiada."
+STALE_SCREEN_MESSAGE = "A tarefa mudou desde que a tela foi aberta. Atualize a lista."
 
 # As duas ações sobre o estado da tarefa, no fim da rota.
 COMPLETION_ACTIONS = ["complete", "uncomplete"]
@@ -187,6 +189,24 @@ def assert_completion_refused(client, test_engine, task_id, action, status_code)
     before = database_snapshot(test_engine)
 
     response = client.post(f"/tasks/{task_id}/{action}")
+
+    assert response.status_code == status_code
+    assert database_snapshot(test_engine) == before
+    return response
+
+
+# Adia uma tarefa pela API, confere que deu certo e devolve o JSON da resposta.
+def postpone_task(client, task_id, shown_due_date):
+    response = client.post(f"/tasks/{task_id}/postpone", json={"shown_due_date": shown_due_date})
+    assert response.status_code == 200
+    return response.json()
+
+
+# Confere que o adiamento foi recusado com o código esperado e que nada foi gravado.
+def assert_postpone_refused(client, test_engine, task_id, shown_due_date, status_code=409):
+    before = database_snapshot(test_engine)
+
+    response = client.post(f"/tasks/{task_id}/postpone", json={"shown_due_date": shown_due_date})
 
     assert response.status_code == status_code
     assert database_snapshot(test_engine) == before
@@ -1911,3 +1931,448 @@ def test_failed_uncompletion_changes_nothing(client, test_engine, monkeypatch):
         client.post(f"/tasks/{task_id}/uncomplete")
 
     assert database_snapshot(test_engine) == before
+
+
+# Critério da tarefa 7: 0, 1 e 2 adiamentos ainda adiam; 3 e 4 ficam nos testes logo abaixo.
+@pytest.mark.parametrize("postponements, expected", [(0, 1), (1, 2), (2, 3)])
+def test_postpone_counts_one_postponement(client, test_engine, postponements, expected):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 5), postponements=postponements)
+
+    postponed = postpone_task(client, task_id, "2026-11-05")
+
+    assert postponed["id"] == task_id
+    assert postponed["due_date"] == "2026-11-06"
+    assert postponed["postponements"] == expected
+
+
+@pytest.mark.parametrize("postponements", [3, 4])
+def test_postpone_refuses_task_locked_by_manual_postponements(
+    client, test_engine, postponements
+):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 5), postponements=postponements)
+
+    response = assert_postpone_refused(client, test_engine, task_id, "2026-11-05")
+
+    assert response.json()["detail"] == LOCKED_DATE_MESSAGE
+
+
+# Cada linha é um caso: adiamentos manuais, data atrasada e o contador depois de adiar.
+@pytest.mark.parametrize(
+    "postponements, due_date, expected",
+    [
+        (0, date(2026, 10, 31), 2),
+        (1, date(2026, 10, 31), 3),
+        (0, date(2026, 10, 30), 3),
+    ],
+)
+def test_postpone_adds_days_late_to_the_counter(
+    client, test_engine, postponements, due_date, expected
+):
+    task_id = insert_task(test_engine, due_date=due_date, postponements=postponements)
+
+    postponed = postpone_task(client, task_id, due_date.isoformat())
+
+    assert postponed["due_date"] == "2026-11-02"
+    assert postponed["postponements"] == expected
+
+
+# Cada linha soma 3 ou mais adiamentos efetivos, contando os dias de atraso. A primeira data do
+# calendário fica no fim: milhares de anos de atraso também não viram erro 500.
+@pytest.mark.parametrize(
+    "postponements, due_date",
+    [
+        (0, date(2026, 10, 29)),
+        (1, date(2026, 10, 30)),
+        (2, date(2026, 10, 31)),
+        (0, date(2026, 10, 28)),
+        (2, date(2026, 10, 30)),
+        (0, date.min),
+    ],
+)
+def test_postpone_refuses_task_locked_by_days_late(client, test_engine, postponements, due_date):
+    task_id = insert_task(test_engine, due_date=due_date, postponements=postponements)
+
+    response = assert_postpone_refused(client, test_engine, task_id, due_date.isoformat())
+
+    assert response.json()["detail"] == LOCKED_DATE_MESSAGE
+
+
+# "Sempre amanhã" foi descartado: numa data futura, viraria antecipar.
+def test_postpone_future_task_goes_to_the_day_after_its_date_not_to_tomorrow(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 10))
+
+    postponed = postpone_task(client, task_id, "2026-11-10")
+
+    assert postponed["due_date"] == "2026-11-11"
+    assert postponed["postponements"] == 1
+
+
+def test_postpone_task_due_today_goes_to_tomorrow(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 1))
+
+    postponed = postpone_task(client, task_id, "2026-11-01")
+
+    assert postponed["due_date"] == "2026-11-02"
+    assert postponed["postponements"] == 1
+
+
+# Exemplo da seção 4.2: 0 adiamentos e 2 dias de atraso dão 0 + 2 + 1 = 3, então a data trava.
+def test_postpone_late_task_goes_to_tomorrow_and_locks_the_date(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 30))
+
+    postponed = postpone_task(client, task_id, "2026-10-30")
+
+    assert postponed["due_date"] == "2026-11-02"
+    assert postponed["postponements"] == 3
+
+    response = assert_postpone_refused(client, test_engine, task_id, "2026-11-02")
+
+    assert response.json()["detail"] == LOCKED_DATE_MESSAGE
+
+
+# Às 02h59 UTC de 01/11 ainda é 31/10 em Brasília, então a tarefa vence "hoje". Um minuto depois
+# já é 01/11: ela tem 1 dia de atraso e vai para o dia seguinte a 01/11.
+@pytest.mark.parametrize(
+    "hour, minute, expected_date, expected_postponements",
+    [(2, 59, "2026-11-01", 1), (3, 0, "2026-11-02", 2)],
+)
+def test_postpone_follows_the_brasilia_day(
+    client, test_engine, monkeypatch, hour, minute, expected_date, expected_postponements
+):
+    set_now(monkeypatch, datetime(2026, 11, 1, hour, minute, tzinfo=timezone.utc))
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 31))
+
+    postponed = postpone_task(client, task_id, "2026-10-31")
+
+    assert postponed["due_date"] == expected_date
+    assert postponed["postponements"] == expected_postponements
+
+
+# Com 2 adiamentos, a tarefa de 31/10 só trava quando vira 01/11 em Brasília: 2 + 1 = 3.
+def test_postpone_lock_follows_the_brasilia_day(client, test_engine, monkeypatch):
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 31), postponements=2)
+
+    set_now(monkeypatch, datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc))
+    response = assert_postpone_refused(client, test_engine, task_id, "2026-10-31")
+    assert response.json()["detail"] == LOCKED_DATE_MESSAGE
+
+    set_now(monkeypatch, datetime(2026, 11, 1, 2, 59, tzinfo=timezone.utc))
+    assert postpone_task(client, task_id, "2026-10-31")["postponements"] == 3
+
+
+def test_postpone_refuses_completed_task(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 1), **COMPLETED_FIELDS)
+
+    response = assert_postpone_refused(client, test_engine, task_id, "2026-11-01")
+
+    assert response.json()["detail"] == COMPLETED_DATE_MESSAGE
+
+
+# A mensagem manda desmarcar antes: depois de desmarcar, o Adiar precisa voltar a funcionar.
+def test_postpone_works_again_after_uncomplete(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 1))
+    complete_task(client, task_id)
+
+    response = assert_postpone_refused(client, test_engine, task_id, "2026-11-01")
+    assert response.json()["detail"] == COMPLETED_DATE_MESSAGE
+
+    uncomplete_task(client, task_id)
+
+    assert postpone_task(client, task_id, "2026-11-01")["postponements"] == 1
+
+
+# O toque duplo manda duas vezes a data que a tela mostrava. Sem a conferência, a tarefa andaria
+# 2 dias, com 2 adiamentos, e concluir valeria 12 XP em vez de 18.
+def test_double_tap_postpones_only_once(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 1), difficulty="medium")
+    postpone_task(client, task_id, "2026-11-01")
+
+    response = assert_postpone_refused(client, test_engine, task_id, "2026-11-01")
+
+    assert response.json()["detail"] == STALE_SCREEN_MESSAGE
+    [task] = tasks_in_database(test_engine)
+    assert task.due_date == date(2026, 11, 2)
+    assert task.postponements == 1
+    assert complete_task(client, task_id)["xp_change"] == 18
+
+
+# Se o primeiro toque travou a data, o motivo do segundo é a trava, não a tela desatualizada.
+def test_double_tap_that_reaches_the_lock_gets_the_lock_message(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 5), postponements=2)
+    postpone_task(client, task_id, "2026-11-05")
+
+    response = assert_postpone_refused(client, test_engine, task_id, "2026-11-05")
+
+    assert response.json()["detail"] == LOCKED_DATE_MESSAGE
+
+
+# A tela pode estar atrás ou à frente da tarefa: em qualquer caso, não mostra a data certa.
+@pytest.mark.parametrize("shown_due_date", ["2026-10-20", "2026-11-04", "2026-11-06"])
+def test_postpone_refuses_a_date_different_from_the_task(client, test_engine, shown_due_date):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 5))
+
+    response = assert_postpone_refused(client, test_engine, task_id, shown_due_date)
+
+    assert response.json()["detail"] == STALE_SCREEN_MESSAGE
+
+
+# Recarregar resolve: com a data que a resposta trouxe, um segundo adiamento de verdade passa.
+def test_postpone_with_the_new_date_counts_a_second_postponement(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 1))
+    postponed = postpone_task(client, task_id, "2026-11-01")
+
+    postponed_again = postpone_task(client, task_id, postponed["due_date"])
+
+    assert postponed_again["due_date"] == "2026-11-03"
+    assert postponed_again["postponements"] == 2
+
+
+# Reproduz dois toques ao mesmo tempo sem depender de threads, como nos testes de concluir: a
+# sessão velha lê a tarefa, outro pedido a adia, e só então a rota roda com a leitura velha. A
+# variável old_task precisa existir: a sessão só guarda a leitura enquanto algo aponta para ela.
+def test_postpone_with_an_old_read_gets_409_and_counts_one_postponement(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 1))
+    postpone_input = tasks_router.TaskPostpone(shown_due_date=date(2026, 11, 1))
+
+    with Session(test_engine) as old_session:
+        old_task = old_session.get(Task, task_id)
+        postpone_task(client, task_id, "2026-11-01")
+        assert old_session.get(Task, task_id).postponements == 0
+
+        with pytest.raises(HTTPException) as refusal:
+            tasks_router.postpone_task(task_id, postpone_input, old_session)
+
+    assert refusal.value.status_code == 409
+    assert refusal.value.detail == STALE_SCREEN_MESSAGE
+    assert old_task.id == task_id
+    [task] = tasks_in_database(test_engine)
+    assert task.due_date == date(2026, 11, 2)
+    assert task.postponements == 1
+
+
+# O mesmo com um Adiar e um Concluir ao mesmo tempo. Conferir task.completed em Python deixaria
+# passar, e a tarefa concluída ficaria com a data mudada, contra a seção 6.1.
+def test_postpone_with_an_old_read_does_not_change_a_completed_task(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 1), difficulty="medium")
+    postpone_input = tasks_router.TaskPostpone(shown_due_date=date(2026, 11, 1))
+
+    with Session(test_engine) as old_session:
+        old_task = old_session.get(Task, task_id)
+        complete_task(client, task_id)
+        assert old_session.get(Task, task_id).completed is False
+
+        with pytest.raises(HTTPException) as refusal:
+            tasks_router.postpone_task(task_id, postpone_input, old_session)
+
+    assert refusal.value.status_code == 409
+    assert refusal.value.detail == STALE_SCREEN_MESSAGE
+    assert old_task.id == task_id
+    [task] = tasks_in_database(test_engine)
+    assert task.completed is True
+    assert task.due_date == date(2026, 11, 1)
+    assert task.postponements == 0
+    assert task_amounts(test_engine, task_id) == [25]
+
+
+# A data 9999-12-31 não tem dia seguinte. Sem o cuidado, o pedido viraria um erro 500.
+def test_postpone_refuses_the_last_date(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date.max)
+
+    response = assert_postpone_refused(client, test_engine, task_id, "9999-12-31")
+
+    assert response.json()["detail"] == LAST_DATE_MESSAGE
+
+
+def test_postpone_reaches_the_last_date_and_stops_there(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(9999, 12, 30))
+
+    postponed = postpone_task(client, task_id, "9999-12-30")
+
+    assert postponed["due_date"] == "9999-12-31"
+    assert postponed["postponements"] == 1
+
+    response = assert_postpone_refused(client, test_engine, task_id, "9999-12-30")
+
+    assert response.json()["detail"] == LAST_DATE_MESSAGE
+
+
+# A ordem dos 409, do mais definitivo para o mais passageiro. Cada linha junta dois ou mais
+# motivos, e a mensagem mostra qual deles vem primeiro.
+@pytest.mark.parametrize(
+    "fields, shown_due_date, message",
+    [
+        (
+            COMPLETED_FIELDS | {"due_date": date(2026, 11, 5), "postponements": 3},
+            "2026-11-04",
+            COMPLETED_DATE_MESSAGE,
+        ),
+        (
+            COMPLETED_FIELDS | {"due_date": date(2026, 11, 5)},
+            "2026-11-04",
+            COMPLETED_DATE_MESSAGE,
+        ),
+        (COMPLETED_FIELDS | {"due_date": date.max}, "9999-12-31", COMPLETED_DATE_MESSAGE),
+        ({"due_date": date.max, "postponements": 3}, "9999-12-31", LOCKED_DATE_MESSAGE),
+        ({"due_date": date(2026, 11, 5), "postponements": 3}, "2026-11-04", LOCKED_DATE_MESSAGE),
+        ({"due_date": date.max}, "2026-11-01", LAST_DATE_MESSAGE),
+    ],
+)
+def test_postpone_refusals_follow_their_order(
+    client, test_engine, fields, shown_due_date, message
+):
+    task_id = insert_task(test_engine, **fields)
+
+    response = assert_postpone_refused(client, test_engine, task_id, shown_due_date)
+
+    assert response.json()["detail"] == message
+
+
+@pytest.mark.parametrize("task_id", [999, 2147483647])
+def test_postpone_unknown_task_returns_404(client, test_engine, task_id):
+    insert_task(test_engine)
+
+    assert_postpone_refused(client, test_engine, task_id, "2026-11-01", status_code=404)
+
+
+@pytest.mark.parametrize("task_id", [0, -1, 2147483648, 10**30])
+def test_postpone_refuses_id_out_of_range(client, test_engine, task_id):
+    insert_task(test_engine)
+
+    assert_postpone_refused(client, test_engine, task_id, "2026-11-01", status_code=422)
+
+
+def test_postpone_deleted_task_returns_404(client, test_engine):
+    task_id = insert_task(test_engine)
+    assert client.delete(f"/tasks/{task_id}").status_code == 204
+
+    assert_postpone_refused(client, test_engine, task_id, "2026-11-01", status_code=404)
+
+
+# Corpos inválidos: sem o campo, data nula, malformada ou vazia e campo desconhecido.
+INVALID_POSTPONE_BODIES = [
+    {},
+    {"shown_due_date": None},
+    {"shown_due_date": ""},
+    {"shown_due_date": "01/11/2026"},
+    {"shown_due_date": "2026-13-01"},
+    {"due_date": "2026-11-01"},
+    {"shown_due_date": "2026-11-01", "postponements": 0},
+]
+
+
+# O dado é conferido antes do estado, então o 422 vem antes do 404 e do 409 (etapa 5.8).
+@pytest.mark.parametrize("body", INVALID_POSTPONE_BODIES)
+@pytest.mark.parametrize(
+    "fields, task_exists",
+    [({}, True), (COMPLETED_FIELDS, True), ({"postponements": 3}, True), ({}, False)],
+)
+def test_postpone_refuses_invalid_body(client, test_engine, body, fields, task_exists):
+    task_id = insert_task(test_engine, **fields)
+    url_id = task_id if task_exists else 999
+    before = database_snapshot(test_engine)
+
+    response = client.post(f"/tasks/{url_id}/postpone", json=body)
+
+    assert response.status_code == 422
+    assert database_snapshot(test_engine) == before
+
+
+def test_postpone_refuses_request_without_body(client, test_engine):
+    task_id = insert_task(test_engine)
+    before = database_snapshot(test_engine)
+
+    response = client.post(f"/tasks/{task_id}/postpone")
+
+    assert response.status_code == 422
+    assert database_snapshot(test_engine) == before
+
+
+# Seção 6.7: nenhum GET altera dados, porque a conferência de Origin não cobre o GET.
+def test_postpone_does_not_accept_get(client, test_engine):
+    task_id = insert_task(test_engine)
+    before = database_snapshot(test_engine)
+
+    response = client.get(f"/tasks/{task_id}/postpone")
+
+    assert response.status_code == 405
+    assert database_snapshot(test_engine) == before
+
+
+# Adiar muda só a data e o contador, e só desta tarefa. O XP nasce ao concluir, então nenhuma
+# linha entra no histórico.
+def test_postpone_changes_only_the_date_and_the_counter(client, test_engine):
+    task_type = client.post("/task-types", json={"name": "Leitura"}).json()
+    task_id = insert_task(
+        test_engine,
+        title="Ler",
+        notes="Capítulo 1",
+        due_date=date(2026, 11, 5),
+        difficulty="hard",
+        color="#112233",
+        task_type_id=task_type["id"],
+    )
+    other_id = insert_task(test_engine, due_date=date(2026, 11, 5))
+    expected = {task.id: task.model_dump() for task in tasks_in_database(test_engine)}
+    expected[task_id] |= {"due_date": date(2026, 11, 6), "postponements": 1}
+
+    postpone_task(client, task_id, "2026-11-05")
+
+    assert {task.id: task.model_dump() for task in tasks_in_database(test_engine)} == expected
+    assert expected[other_id]["postponements"] == 0
+    assert xp_entries_in_database(test_engine) == []
+
+
+def test_postponed_task_moves_to_its_new_day(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 5))
+
+    postpone_task(client, task_id, "2026-11-05")
+
+    assert ids(day_tasks(client, "2026-11-05")["pending"]) == []
+    assert ids(day_tasks(client, "2026-11-06")["pending"]) == [task_id]
+
+
+# Sem isto, a tarefa atrasada continuaria em destaque na visão de hoje depois de adiar.
+def test_postponed_late_task_leaves_overdue(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 31))
+    assert ids(day_tasks(client, "2026-11-01")["overdue"]) == [task_id]
+
+    postpone_task(client, task_id, "2026-10-31")
+
+    assert ids(day_tasks(client, "2026-11-01")["overdue"]) == []
+    assert ids(day_tasks(client, "2026-11-02")["pending"]) == [task_id]
+
+
+# Cada adiamento tira 25%, mesmo concluindo antes da data nova (seção 4.2).
+@pytest.mark.parametrize(
+    "difficulty, expected_xp", [("easy", 7), ("medium", 18), ("hard", 37)]
+)
+def test_postponed_task_is_worth_25_percent_less(client, test_engine, difficulty, expected_xp):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 1), difficulty=difficulty)
+
+    postpone_task(client, task_id, "2026-11-01")
+
+    assert complete_task(client, task_id)["xp_change"] == expected_xp
+
+
+# Critério da tarefa 7 do começo ao fim, pela API: três adiamentos e o quarto recusado. A tarefa
+# travada ainda aceita editar o título e ainda dá para concluí-la, valendo 25%.
+def test_three_postpones_lock_the_date_but_title_and_completion_still_work(client, test_engine):
+    task = create_task(client, difficulty="medium")
+
+    shown_due_date = task["due_date"]
+    for expected_date, expected in [("2026-11-02", 1), ("2026-11-03", 2), ("2026-11-04", 3)]:
+        postponed = postpone_task(client, task["id"], shown_due_date)
+        assert postponed["due_date"] == expected_date
+        assert postponed["postponements"] == expected
+        shown_due_date = postponed["due_date"]
+
+    response = assert_postpone_refused(client, test_engine, task["id"], shown_due_date)
+    assert response.json()["detail"] == LOCKED_DATE_MESSAGE
+
+    updated = update_task(
+        client, task["id"], title="Só o título", difficulty="medium", due_date=shown_due_date
+    )
+    assert updated["title"] == "Só o título"
+    assert updated["postponements"] == 3
+
+    assert complete_task(client, task["id"])["xp_change"] == 6

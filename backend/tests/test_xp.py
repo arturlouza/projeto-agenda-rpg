@@ -3,10 +3,12 @@ from datetime import date
 import pytest
 
 from app.rules.xp import (
+    POSTPONE_DAYS,
     completion_reason,
     effective_postponements,
     is_due_date_locked,
     level_from_total_xp,
+    postponed_due_date,
     postponements_after_date_change,
     task_xp,
     uncompletion_reason,
@@ -138,6 +140,46 @@ def test_moving_date_earlier_does_not_count():
 def test_same_date_on_late_task_does_not_change_counter():
     result = postponements_after_date_change(0, 2, date(2026, 10, 30), date(2026, 10, 30))
     assert result == 0
+
+
+def test_postpone_moves_one_day():
+    assert POSTPONE_DAYS == 1
+
+
+# Cada linha é um caso: data marcada, hoje e a data nova. "Sempre amanhã" foi descartado porque,
+# numa data futura, viraria antecipar.
+@pytest.mark.parametrize(
+    "due_date, today, expected",
+    [
+        (date(2026, 11, 10), date(2026, 11, 1), date(2026, 11, 11)),
+        (date(2026, 11, 2), date(2026, 11, 1), date(2026, 11, 3)),
+        (date(2026, 11, 1), date(2026, 11, 1), date(2026, 11, 2)),
+        (date(2026, 10, 31), date(2026, 11, 1), date(2026, 11, 2)),
+        (date(2026, 10, 30), date(2026, 11, 1), date(2026, 11, 2)),
+        (date(2026, 12, 31), date(2026, 12, 31), date(2027, 1, 1)),
+        (date(9999, 12, 30), date(2026, 11, 1), date(9999, 12, 31)),
+    ],
+)
+def test_postponed_due_date_is_one_day_after_the_later_of_due_date_and_today(
+    due_date, today, expected
+):
+    assert postponed_due_date(due_date, today) == expected
+
+
+# Somar um dia a 9999-12-31 daria OverflowError, e o pedido viraria um erro 500.
+def test_postponed_due_date_has_no_day_after_the_last_date():
+    assert postponed_due_date(date.max, date(2026, 11, 1)) is None
+
+
+# É por isto que a rota do Adiar não precisa conferir se a data nova é anterior a hoje.
+@pytest.mark.parametrize(
+    "due_date",
+    [date.min, date(2026, 10, 30), date(2026, 11, 1), date(2026, 11, 2), date(9999, 12, 30)],
+)
+def test_postponed_due_date_is_always_after_today(due_date):
+    today = date(2026, 11, 1)
+
+    assert postponed_due_date(due_date, today) > today
 
 
 # Cada linha é um histórico de tarefa concluída e o valor que desmarcar grava. A última mostra

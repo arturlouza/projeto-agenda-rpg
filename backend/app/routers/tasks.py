@@ -11,6 +11,7 @@ from app.routers.task_types import MAX_ID, SessionDep
 from app.rules.xp import (
     completion_reason,
     is_due_date_locked,
+    postponed_due_date,
     postponements_after_date_change,
     task_xp,
     uncompletion_reason,
@@ -75,6 +76,14 @@ class TaskInput(TaskUpdate):
     task_type_id: int | None = None
 
 
+# O que a API recebe ao adiar: a data que a tela mostrava. A data nova é o servidor quem
+# calcula. Um toque duplo manda duas vezes a mesma data, e o segundo pedido é recusado.
+class TaskPostpone(SQLModel):
+    model_config = ConfigDict(extra="forbid")
+
+    shown_due_date: date
+
+
 # O que a API devolve ao listar um dia: os três grupos da visão do dia (seção 6.2).
 class DayTasks(SQLModel):
     overdue: list[Task]
@@ -119,22 +128,27 @@ def ensure_date_is_not_past(day: date) -> None:
         )
 
 
-# Muda a data de uma tarefa, para a edição e para o botão Adiar (tarefa 7). Quem chama já
-# conferiu que a data é outra e que não é anterior a hoje. A trava vem antes do contador,
-# porque postponements_after_date_change não a confere. Os dias de atraso podem sair negativos
-# aqui, com a data no futuro: as regras de xp.py tratam esse valor como 0.
-def change_due_date(task: Task, new_due_date: date) -> None:
+# Responde 409 se a data não puder mudar: tarefa concluída ou data travada. Quem chama informa
+# os dias de atraso, para a trava e o contador usarem o mesmo "hoje", mesmo à meia-noite.
+def ensure_due_date_can_change(task: Task, days_late: int) -> None:
     if task.completed:
         raise HTTPException(
             status.HTTP_409_CONFLICT, detail="Desmarque a tarefa antes de mudar a data."
         )
 
-    days_late = (app_today() - task.due_date).days
-
     if is_due_date_locked(task.postponements, days_late):
         raise HTTPException(
             status.HTTP_409_CONFLICT, detail="A data desta tarefa está travada e não pode mudar."
         )
+
+
+# Muda a data de uma tarefa na edição. Quem chama já conferiu que a data é outra e que não é
+# anterior a hoje. A trava vem antes do contador, porque postponements_after_date_change não a
+# confere. Os dias de atraso podem sair negativos aqui, com a data no futuro: as regras de xp.py
+# tratam esse valor como 0.
+def change_due_date(task: Task, new_due_date: date) -> None:
+    days_late = (app_today() - task.due_date).days
+    ensure_due_date_can_change(task, days_late)
 
     task.postponements = postponements_after_date_change(
         task.postponements, days_late, task.due_date, new_due_date
@@ -348,3 +362,59 @@ def uncomplete_task(task_id: TaskId, session: SessionDep) -> TaskXpChange:
     session.commit()
     session.refresh(task)
     return TaskXpChange(task=task, xp_change=amount)
+
+
+# A tarefa só muda se ainda estiver pendente e com a data que a tela mostrava, numa instrução
+# só, como em change_completed. Assim, dois pedidos ao mesmo tempo, ou um Adiar junto com um
+# Concluir, não passam os dois. Não usa change_due_date, que grava sem condição. A data nova é
+# sempre depois de hoje, então ensure_date_is_not_past nunca recusaria. Adiar não mexe no XP,
+# então nada entra no histórico.
+@router.post(
+    "/{task_id}/postpone",
+    responses={
+        404: {"description": "Tarefa não encontrada."},
+        409: {
+            "description": (
+                "A tarefa está concluída, travada ou na última data possível, "
+                "ou a tela estava desatualizada."
+            )
+        },
+    },
+)
+def postpone_task(task_id: TaskId, postpone_input: TaskPostpone, session: SessionDep) -> Task:
+    task = get_task_or_404(session, task_id)
+
+    today = app_today()
+    days_late = (today - task.due_date).days
+    ensure_due_date_can_change(task, days_late)
+
+    new_due_date = postponed_due_date(task.due_date, today)
+    if new_due_date is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="Esta tarefa já está na última data possível e não pode ser adiada.",
+        )
+
+    new_postponements = postponements_after_date_change(
+        task.postponements, days_late, task.due_date, new_due_date
+    )
+
+    changed_rows = session.exec(
+        update(Task)
+        .where(
+            Task.id == task_id,
+            Task.completed == False,
+            Task.due_date == postpone_input.shown_due_date,
+        )
+        .values(due_date=new_due_date, postponements=new_postponements)
+    ).rowcount
+
+    if changed_rows == 0:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="A tarefa mudou desde que a tela foi aberta. Atualize a lista.",
+        )
+
+    session.commit()
+    session.refresh(task)
+    return task
