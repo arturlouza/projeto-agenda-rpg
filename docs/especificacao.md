@@ -121,6 +121,12 @@ O total para chegar ao nível 100 é de cerca de 87 mil XP. A calibragem conside
 
 Com 120 XP/dia: nível 10 em cerca de 9 dias, nível 50 em uns 5 meses, nível 75 em cerca de 1 ano. Quem cumpre pouca coisa sobe mais devagar, o que é justo.
 
+**Barra de progresso:**
+
+- A barra mostra a porcentagem do XP acumulado dentro do nível atual sobre o custo desse nível: `porcentagem = arredondar_para_baixo(XP_dentro_do_nível × 100 ÷ XP_para_subir)`, inteira, com conta só de números inteiros.
+- Vai de 0 a 99 e **nunca mostra 100%** antes de subir de nível. Ao subir, volta a 0%. Exemplo: com 100 XP, o nível é 2 e a barra está em 0%.
+- Pelas regras, o XP total nunca fica negativo. Se ficar, por um banco mexido à mão ou uma restauração errada, o nível e a barra tratam o total como 0, e o XP total mostra a soma real.
+
 ### 4.6 Missões (Versão 2)
 
 - Toda missão tem uma meta com fim: ou uma lista de tarefas, ou uma tarefa repetida com número de vezes definido (exemplo: 30 dias de leitura). Missão sem fim não pode ser criada.
@@ -531,6 +537,19 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 - Botão na tela: o front-end manda em `shown_due_date` a data que recebeu da listagem e nunca calcula a data nova. O 409 recarrega a lista, como no Concluir.
 - A edição tem uma brecha parecida, que continua aberta: um `PUT` que muda a data, sobreposto a um Concluir, grava a data numa tarefa concluída; sobreposto a um Adiar, perde um adiamento. É bem menos provável, porque o formulário fica em outra tela. Falta decidir se e quando tratar.
 
+**Decisões da tarefa 8 (plano `08-api-do-jogador.md`):**
+
+- **Rota:** `GET /player`, só leitura, num router próprio (`routers/player.py`). Responde 200 com `total_xp`, `level`, `xp_into_level` (XP já acumulado dentro do nível atual), `xp_for_next_level` (quanto o nível atual custa) e `progress_percent`. "Quanto falta" (seção 6.2) é `xp_for_next_level − xp_into_level` e não vira campo próprio.
+- **A conta:** duas funções puras em `rules/xp.py`. `level_progress` devolve o nível e o XP dentro dele e substitui `level_from_total_xp`, que descartava essa sobra. `progress_percent` faz a porcentagem da seção 4.5. A rota só soma o histórico e chama as regras.
+- **Desempenho:** até o nível 100, o laço paga um nível por volta, no máximo 99 voltas. Do 100 em diante, como todo nível custa o mesmo, uma divisão resolve o resto. Com o laço antigo, 10 bilhões de XP levavam 4 segundos; agora qualquer total leva uma fração de milissegundo. O total de 86.928 XP até o nível 100 não vira constante, para não haver um segundo número a manter quando a fórmula mudar.
+- **A soma:** feita no banco, com `func.sum` do SQLModel, sem SQL escrito à mão. Com 365 mil linhas, o banco somou em 0,02 s e o Python, em 0,35 s. O histórico vazio dá `NULL`, tratado como 0: nível 1, barra em 0%.
+- **Fica para a tarefa 16:** no PostgreSQL, a soma de `INTEGER` vem como `BIGINT`. Conferir que chega ao Python como `int` quando o driver entrar.
+
+**Fora da tarefa 8:**
+
+- **Comemoração ao subir de nível (tarefa 13):** depois de concluir, a tela pede o `/player` de novo para atualizar a barra. Ela compara o `level` novo com o que estava mostrando e, se for maior, mostra a comemoração. Não precisa de campo novo, e o JavaScript só compara dois números vindos do servidor, sem conta de XP. Ao abrir o app não há comparação, então não há comemoração falsa. Desmarcar e concluir de novo comemora outra vez, o que é inofensivo. Alternativa, se o segundo pedido incomodar: a resposta de concluir traz o nível. Decidir na tarefa 13.
+- **Limite da porcentagem inteira:** no nível 100, 1% são 20,7 XP, então uma tarefa fácil às vezes não move a porcentagem. O XP ganho aparece no "+XP" ao concluir (seção 6.3).
+
 **Detalhe sobre testar no celular:** antes da publicação, o teste é pelo cabo USB, abrindo `http://localhost:8000` no celular, como explica a seção 6.7. Como `localhost` é origem segura, o service worker e a instalação já podem ser testados assim. A instalação definitiva vem na tarefa 17.
 
 **Segurança nas tarefas 9 a 14 (regras na seção 6.7):**
@@ -606,16 +625,18 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | `backend/app/database.py` | Conecta ao banco, entrega a sessão e liga as chaves estrangeiras no SQLite. | `DATABASE_URL`, `create_db_and_tables`, `get_session`, `enable_sqlite_foreign_keys` | 2, 6.6 | `test_database.py` |
 | `backend/app/models.py` | Define as três tabelas do banco. | `TaskType`, `Task`, `XpEntry`, `utc_now`, `DEFAULT_TASK_COLOR` | 6.1, 6.4, 6.6 | `test_database.py` |
 | `backend/app/dates.py` | Responde "que dia é" no horário de Brasília. | `APP_TIMEZONE`, `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4, 6.2 | `test_dates.py` |
-| `backend/app/rules/xp.py` | Guarda as regras de XP, adiamento, devolução e nível, com os números no topo, e os textos do histórico. | `task_xp`, `effective_postponements`, `is_due_date_locked`, `postponements_after_date_change`, `postponed_due_date`, `xp_to_refund`, `completion_reason`, `uncompletion_reason`, `xp_to_next_level`, `level_from_total_xp` | 4.1, 4.2, 4.3, 4.4, 4.5 | `test_xp.py` |
+| `backend/app/rules/xp.py` | Guarda as regras de XP, adiamento, devolução, nível e barra, com os números no topo, e os textos do histórico. | `task_xp`, `effective_postponements`, `is_due_date_locked`, `postponements_after_date_change`, `postponed_due_date`, `xp_to_refund`, `completion_reason`, `uncompletion_reason`, `xp_to_next_level`, `level_progress`, `progress_percent` | 4.1, 4.2, 4.3, 4.4, 4.5 | `test_xp.py` |
 | `backend/app/routers/task_types.py` | API dos tipos de tarefa; também define `SessionDep` e `MAX_ID`, usados em `tasks.py`. | `POST /task-types`, `GET /task-types`, `PATCH /task-types/{task_type_id}`, `DELETE /task-types/{task_type_id}` | 6.1, 6.6 | `test_task_types.py` |
 | `backend/app/routers/tasks.py` | API das tarefas: criar, listar por dia e semana, editar (inclusive a data), excluir, concluir, desmarcar e adiar. | `POST /tasks`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `POST /tasks/{task_id}/complete`, `POST /tasks/{task_id}/uncomplete`, `POST /tasks/{task_id}/postpone`, `ensure_date_is_not_past`, `ensure_due_date_can_change`, `change_due_date`, `change_completed` | 6.1, 6.2, 4.2, 4.3, 4.4 | `test_tasks.py` |
+| `backend/app/routers/player.py` | API do jogador: soma o histórico e devolve XP total, nível e barra. | `GET /player`, `Player` | 4.4, 4.5, 6.2 | `test_player.py` |
 | `backend/tests/conftest.py` | Reúne o que os testes de banco e de API têm em comum. O pytest carrega este arquivo sozinho. | `empty_engine`, `test_engine`, `client` | não se aplica | não se aplica |
 | `backend/tests/test_health.py` | Testa a rota `/health`. | `test_health_returns_ok` | 10 (tarefa 1) | não se aplica |
 | `backend/tests/test_database.py` | Testa a criação das tabelas ao iniciar, os valores padrão, as chaves estrangeiras e o AUTOINCREMENT só no SQLite. | `test_app_startup_creates_tables`, `test_task_with_unknown_task_type_is_refused`, `test_xp_entry_with_unknown_task_is_refused`, `test_autoincrement_exists_only_on_sqlite` | 6.1, 6.6 | não se aplica |
 | `backend/tests/test_dates.py` | Testa o fuso, o "hoje", os limites do dia e a semana. | testes de `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4 | não se aplica |
-| `backend/tests/test_xp.py` | Testa XP, adiamentos, trava da data, data nova do Adiar, devolução, textos do histórico e níveis. | testes de cada função de `xp.py` | 4.1, 4.2, 4.3, 4.4, 4.5 | não se aplica |
+| `backend/tests/test_xp.py` | Testa XP, adiamentos, trava da data, data nova do Adiar, devolução, textos do histórico, níveis e barra, inclusive um total enorme. | testes de cada função de `xp.py` | 4.1, 4.2, 4.3, 4.4, 4.5 | não se aplica |
 | `backend/tests/test_task_types.py` | Testa a API dos tipos de tarefa. | testes de criar, listar, renomear e excluir, de campo desconhecido e de id que não volta | 6.1, 6.6 | não se aplica |
 | `backend/tests/test_tasks.py` | Testa a API das tarefas, com o "hoje" fixo em todos os testes do arquivo. | `fixed_today`, auxiliares `set_now`, `insert_task`, `insert_xp_entry`, `update_data`, `complete_task`, `uncomplete_task`, `postpone_task`, `assert_postpone_refused`, `xp_total` | 6.1, 6.2, 6.6, 4.2, 4.3, 4.4 | não se aplica |
+| `backend/tests/test_player.py` | Testa a API do jogador, com o "hoje" fixo: fronteiras da tabela 4.5, histórico vazio, soma negativa, total enorme e a ligação com concluir, desmarcar e excluir. | `fixed_today`, auxiliares `get_player`, `player`, `insert_xp`, `create_medium_task` | 4.3, 4.4, 4.5, 6.7 | não se aplica |
 | `backend/requirements.txt` | Fixa as versões das dependências. | não se aplica | 2 | não se aplica |
 | `backend/pytest.ini` | Faz o pytest encontrar a pasta `app`. | `pythonpath` | não se aplica | não se aplica |
 | `.gitignore` | Diz o que fica fora do Git. | não se aplica | não se aplica | não se aplica |

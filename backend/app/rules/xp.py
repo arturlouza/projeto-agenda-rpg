@@ -21,10 +21,12 @@ LEVEL_GROWTH_EXPONENT = 1.5
 LEVEL_GROWTH_CAP = 100
 
 
-# Atenção: os dois cálculos de XP abaixo arredondam de formas diferentes, de propósito.
+# Atenção: os cálculos abaixo arredondam de formas diferentes, de propósito.
 # - task_xp arredonda sempre para baixo, como no D&D (seção 4.2 da especificação).
 # - xp_to_next_level usa o arredondamento normal (seção 4.5), porque a tabela de níveis
 #   e o total de 86.928 XP até o nível 100 dependem dele.
+# - progress_percent arredonda para baixo, para a barra nunca mostrar 100% antes de subir
+#   de nível (seção 4.5).
 
 
 # Soma os adiamentos manuais e os dias de atraso. Data no futuro não desconta adiamento.
@@ -93,13 +95,25 @@ def xp_to_next_level(level: int) -> int:
     return round(LEVEL_BASE_XP + growth)
 
 
-# Descobre o nível a partir do XP total: começa no 1 e "paga" um nível de cada vez.
-def level_from_total_xp(total_xp: int) -> int:
+# Descobre o nível e o XP acumulado dentro dele: começa no 1 e "paga" um nível de cada vez.
+# Do nível 100 em diante todo nível custa o mesmo, então uma divisão resolve o resto de uma vez.
+# XP total negativo conta como 0.
+def level_progress(total_xp: int) -> tuple[int, int]:
     level = 1
-    remaining_xp = total_xp
+    remaining_xp = max(total_xp, 0)
 
-    while remaining_xp >= xp_to_next_level(level):
+    while level < LEVEL_GROWTH_CAP and remaining_xp >= xp_to_next_level(level):
         remaining_xp -= xp_to_next_level(level)
         level += 1
 
-    return level
+    if level == LEVEL_GROWTH_CAP:
+        levels_after_cap, remaining_xp = divmod(remaining_xp, xp_to_next_level(LEVEL_GROWTH_CAP))
+        level += levels_after_cap
+
+    return level, remaining_xp
+
+
+# Porcentagem da barra, arredondada para baixo. Como o XP dentro do nível é sempre menor que o
+# custo dele, o resultado vai no máximo a 99: a barra nunca mostra 100% antes de subir.
+def progress_percent(xp_into_level: int, xp_for_next_level: int) -> int:
+    return xp_into_level * 100 // xp_for_next_level

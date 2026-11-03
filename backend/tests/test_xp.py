@@ -2,14 +2,16 @@ from datetime import date
 
 import pytest
 
+from app.rules import xp as xp_rules
 from app.rules.xp import (
     POSTPONE_DAYS,
     completion_reason,
     effective_postponements,
     is_due_date_locked,
-    level_from_total_xp,
+    level_progress,
     postponed_due_date,
     postponements_after_date_change,
+    progress_percent,
     task_xp,
     uncompletion_reason,
     xp_to_next_level,
@@ -228,37 +230,129 @@ def test_xp_to_next_level_stops_growing_after_level_100(level):
     assert xp_to_next_level(level) == 2070
 
 
+# Cada linha é um caso: XP total, o nível e o XP já acumulado dentro dele.
 @pytest.mark.parametrize(
-    "total_xp, expected_level",
+    "total_xp, expected_level, expected_xp_into_level",
     [
-        (0, 1),
-        (99, 1),
-        (100, 2),
-        (201, 2),
-        (202, 3),
+        (0, 1, 0),
+        (99, 1, 99),
+        (100, 2, 0),
+        (201, 2, 101),
+        (202, 3, 0),
     ],
 )
-def test_level_from_total_xp_at_start(total_xp, expected_level):
-    assert level_from_total_xp(total_xp) == expected_level
+def test_level_progress_at_start(total_xp, expected_level, expected_xp_into_level):
+    assert level_progress(total_xp) == (expected_level, expected_xp_into_level)
+
+
+# 86.928 é o total exato para chegar ao nível 100.
+@pytest.mark.parametrize(
+    "total_xp, expected_level, expected_xp_into_level",
+    [
+        (86927, 99, 2039),
+        (86928, 100, 0),
+        (86929, 100, 1),
+    ],
+)
+def test_level_progress_reaches_level_100(total_xp, expected_level, expected_xp_into_level):
+    assert level_progress(total_xp) == (expected_level, expected_xp_into_level)
 
 
 @pytest.mark.parametrize(
-    "total_xp, expected_level",
+    "total_xp, expected_level, expected_xp_into_level",
     [
-        (86927, 99),
-        (86928, 100),
+        (88997, 100, 2069),
+        (88998, 101, 0),
     ],
 )
-def test_level_from_total_xp_reaches_level_100(total_xp, expected_level):
-    assert level_from_total_xp(total_xp) == expected_level
+def test_level_progress_continues_after_level_100(total_xp, expected_level, expected_xp_into_level):
+    assert level_progress(total_xp) == (expected_level, expected_xp_into_level)
 
 
+# Pelas regras a soma não fica negativa, mas, se ficar, o nível e a barra tratam como 0.
+@pytest.mark.parametrize("total_xp", [-1, -50])
+def test_level_progress_treats_negative_total_as_zero(total_xp):
+    assert level_progress(total_xp) == (1, 0)
+
+
+# Depois do nível 100, cada 2.070 XP a mais é exatamente um nível a mais.
+@pytest.mark.parametrize("extra_levels", [1, 2, 10, 1000])
+def test_each_2070_xp_after_level_100_is_one_level(extra_levels):
+    assert level_progress(86928 + extra_levels * 2070) == (100 + extra_levels, 0)
+
+
+# Conta do jeito antigo, pagando um nível de cada vez, sem a divisão depois do nível 100. Só
+# serve para comparar com level_progress em totais pequenos, onde ela ainda é rápida.
+def level_progress_one_level_at_a_time(total_xp):
+    level = 1
+    remaining_xp = total_xp
+
+    while remaining_xp >= xp_to_next_level(level):
+        remaining_xp -= xp_to_next_level(level)
+        level += 1
+
+    return level, remaining_xp
+
+
+def test_level_progress_matches_paying_one_level_at_a_time():
+    for total_xp in range(86000, 100001, 7):
+        assert level_progress(total_xp) == level_progress_one_level_at_a_time(total_xp)
+
+
+# Um total enorme dá o nível certo e chama xp_to_next_level no máximo 199 vezes (2 por volta
+# nos 99 primeiros níveis, mais 1 da divisão). O contador falha logo na chamada 200: se a
+# conta voltar a pagar nível por nível, o teste falha na hora em vez de travar por horas.
+def test_level_progress_with_huge_total_is_fast_and_right(monkeypatch):
+    calls = 0
+    original = xp_rules.xp_to_next_level
+
+    def counting_xp_to_next_level(level):
+        nonlocal calls
+        calls += 1
+        if calls >= 200:
+            pytest.fail("level_progress chamou xp_to_next_level 200 vezes")
+        return original(level)
+
+    monkeypatch.setattr(xp_rules, "xp_to_next_level", counting_xp_to_next_level)
+
+    assert level_progress(10**15) == (483_091_787_497, 1282)
+
+
+# Cada linha é um caso: XP dentro do nível, custo do nível e a porcentagem, sempre para baixo.
 @pytest.mark.parametrize(
-    "total_xp, expected_level",
+    "xp_into_level, xp_for_next_level, expected_percent",
     [
-        (88997, 100),
-        (88998, 101),
+        (0, 100, 0),
+        (99, 100, 99),
+        (20, 102, 19),
+        (1, 2070, 0),
+        (2069, 2070, 99),
+        (2039, 2040, 99),
     ],
 )
-def test_level_from_total_xp_continues_after_level_100(total_xp, expected_level):
-    assert level_from_total_xp(total_xp) == expected_level
+def test_progress_percent_rounds_down(xp_into_level, xp_for_next_level, expected_percent):
+    assert progress_percent(xp_into_level, xp_for_next_level) == expected_percent
+
+
+# Com a conta de números quebrados, 29 / 100 * 100 dá 28.999999999999996, e a barra mostraria 28%.
+def test_progress_percent_uses_only_whole_numbers():
+    assert progress_percent(29, 100) == 29
+
+
+# Em todos os níveis de 1 a 110: no último XP antes de subir, o nível não mudou e a barra está
+# em 99% ou menos; no XP seguinte, o nível sobe e a barra volta a 0%.
+def test_bar_never_shows_100_percent_before_leveling_up():
+    level_start_xp = 0
+
+    for level in range(1, 111):
+        last_xp_before = level_start_xp + xp_to_next_level(level) - 1
+
+        level_before, xp_into_level_before = level_progress(last_xp_before)
+        assert level_before == level
+        assert progress_percent(xp_into_level_before, xp_to_next_level(level)) <= 99
+
+        level_after, xp_into_level_after = level_progress(last_xp_before + 1)
+        assert level_after == level + 1
+        assert progress_percent(xp_into_level_after, xp_to_next_level(level + 1)) == 0
+
+        level_start_xp += xp_to_next_level(level)
