@@ -37,6 +37,15 @@ def app_day_bounds(day: date) -> tuple[datetime, datetime]:
     return app_midnight(day), app_midnight(day + timedelta(days=1))
 
 
+# Devolve o dia anterior e o seguinte. O Python não representa dia antes de 0001-01-01 nem
+# depois de 9999-12-31: nessas pontas, o vizinho que não existe vem como None, em vez de
+# OverflowError.
+def adjacent_days(day: date) -> tuple[date | None, date | None]:
+    previous_day = None if day == date.min else day - timedelta(days=1)
+    next_day = None if day == date.max else day + timedelta(days=1)
+    return previous_day, next_day
+
+
 # Devolve os dias da semana de uma data, de segunda a domingo. weekday() dá 0 na segunda
 # e 6 no domingo. A última semana do calendário termina em 9999-12-31, uma sexta-feira,
 # então ela tem só 5 dias: somar um dia a essa data daria OverflowError.

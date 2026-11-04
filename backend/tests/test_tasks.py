@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 
 from app.models import DEFAULT_TASK_COLOR, Task, XpEntry
 from app.routers import tasks as tasks_router
-from app.routers.tasks import Difficulty
+from app.routers.tasks import Difficulty, TaskView
 from app.rules.xp import TASK_BASE_XP
 
 UNKNOWN_TYPE_MESSAGE = "Esse tipo de tarefa não existe."
@@ -93,6 +93,22 @@ def day_tasks(client, day):
     response = client.get(f"/tasks/day/{day}")
     assert response.status_code == 200
     return response.json()
+
+
+# Separa só os três grupos da resposta do dia, para os testes que conferem os grupos não
+# dependerem dos outros campos, que têm testes próprios.
+def groups(tasks):
+    return {key: tasks[key] for key in ["overdue", "pending", "completed"]}
+
+
+# Os grupos de um dia sem nenhuma tarefa.
+NO_TASKS = {"overdue": [], "pending": [], "completed": []}
+
+
+# A tarefa como a visão do dia a devolve: a mesma resposta das outras rotas, mais os dois
+# campos da tela. Os valores padrão são os de uma tarefa pendente, em dia e sem histórico.
+def as_listed(task, due_date_locked=False, xp_earned=0):
+    return task | {"due_date_locked": due_date_locked, "xp_earned": xp_earned}
 
 
 # Pede os dias de uma semana pela API, confere que deu certo e devolve o JSON da resposta.
@@ -406,13 +422,17 @@ def test_create_refuses_unknown_field(client, test_engine, extra_field):
 
 
 def test_day_without_tasks_returns_three_empty_lists(client):
-    assert day_tasks(client, "2026-11-01") == {"overdue": [], "pending": [], "completed": []}
+    assert groups(day_tasks(client, "2026-11-01")) == NO_TASKS
 
 
 def test_task_created_by_the_api_appears_only_on_its_day(client):
     task = create_task(client, due_date="2026-11-05")
 
-    assert day_tasks(client, "2026-11-05") == {"overdue": [], "pending": [task], "completed": []}
+    assert groups(day_tasks(client, "2026-11-05")) == {
+        "overdue": [],
+        "pending": [as_listed(task)],
+        "completed": [],
+    }
     assert day_tasks(client, "2026-11-04")["pending"] == []
     assert day_tasks(client, "2026-11-06")["pending"] == []
 
@@ -432,7 +452,7 @@ def test_task_completed_at_2230_appears_on_the_brasilia_day(client, test_engine)
     assert ids(completed) == [task_id]
     assert completed[0]["completed_at"] == "2026-11-01T01:30:00Z"
     assert day_tasks(client, "2026-11-01")["completed"] == []
-    assert day_tasks(client, "2026-11-05") == {"overdue": [], "pending": [], "completed": []}
+    assert groups(day_tasks(client, "2026-11-05")) == NO_TASKS
 
 
 # Cada linha é um caso: a hora da conclusão em UTC, o dia em que ela aparece e o dia em que
@@ -481,8 +501,8 @@ def test_overdue_task_is_highlighted_only_in_the_today_view(client, test_engine)
     assert today["pending"] == []
     assert due_day["overdue"] == []
     assert ids(due_day["pending"]) == [task_id]
-    assert day_tasks(client, "2026-10-31") == {"overdue": [], "pending": [], "completed": []}
-    assert day_tasks(client, "2026-11-02") == {"overdue": [], "pending": [], "completed": []}
+    assert groups(day_tasks(client, "2026-10-31")) == NO_TASKS
+    assert groups(day_tasks(client, "2026-11-02")) == NO_TASKS
 
 
 def test_completed_task_is_never_overdue(client, test_engine):
@@ -596,7 +616,7 @@ def test_completed_orders_by_created_at_not_by_completed_at(client, test_engine)
 
 @pytest.mark.parametrize("day", ["9999-12-31", "0001-01-01"])
 def test_extreme_dates_do_not_become_error_500(client, day):
-    assert day_tasks(client, day) == {"overdue": [], "pending": [], "completed": []}
+    assert groups(day_tasks(client, day)) == NO_TASKS
 
 
 def test_last_date_lists_pending_and_completed_tasks(client, test_engine):
@@ -618,6 +638,226 @@ def test_day_refuses_invalid_date(client, day):
     response = client.get(f"/tasks/day/{day}")
 
     assert response.status_code == 422
+
+
+# Pede a visão de hoje pela API, confere que deu certo e devolve o JSON da resposta.
+def today_tasks(client):
+    response = client.get("/tasks/today")
+    assert response.status_code == 200
+    return response.json()
+
+
+# Procura a tarefa nos três grupos de um dia e devolve como a lista a mostrou. Ela precisa
+# aparecer uma vez só.
+def listed_task(client, task_id, day):
+    found = [
+        task
+        for group in groups(day_tasks(client, day)).values()
+        for task in group
+        if task["id"] == task_id
+    ]
+    assert len(found) == 1
+    return found[0]
+
+
+def test_today_is_the_day_list_of_today(client, test_engine):
+    overdue_id = insert_task(test_engine, due_date=date(2026, 10, 30))
+    pending_task = create_task(client)
+    completed_id = insert_task(test_engine, **COMPLETED_FIELDS)
+
+    tasks = today_tasks(client)
+
+    assert tasks == day_tasks(client, "2026-11-01")
+    assert tasks["day"] == "2026-11-01"
+    assert tasks["is_today"] is True
+    assert ids(tasks["overdue"]) == [overdue_id]
+    assert ids(tasks["pending"]) == [pending_task["id"]]
+    assert ids(tasks["completed"]) == [completed_id]
+
+
+# Às 01h30 UTC de 02/11 ainda são 22h30 de 01/11 em Brasília. O dia vira às 03h00 UTC.
+@pytest.mark.parametrize(
+    "moment, expected_day",
+    [
+        (datetime(2026, 11, 2, 1, 30, tzinfo=timezone.utc), "2026-11-01"),
+        (datetime(2026, 11, 2, 3, 0, tzinfo=timezone.utc), "2026-11-02"),
+    ],
+)
+def test_today_follows_brasilia(client, monkeypatch, moment, expected_day):
+    set_now(monkeypatch, moment)
+
+    tasks = today_tasks(client)
+
+    assert tasks["day"] == expected_day
+    assert tasks["is_today"] is True
+
+
+def test_other_day_is_not_today_and_has_its_neighbors(client):
+    tasks = day_tasks(client, "2026-11-05")
+
+    assert tasks["day"] == "2026-11-05"
+    assert tasks["is_today"] is False
+    assert tasks["previous_day"] == "2026-11-04"
+    assert tasks["next_day"] == "2026-11-06"
+
+
+# Pedir a data de hoje pela rota do dia dá o mesmo que /tasks/today.
+def test_day_list_of_today_says_it_is_today(client):
+    assert day_tasks(client, "2026-11-01")["is_today"] is True
+
+
+# Nas pontas do calendário, o vizinho que não existe vem null, sem erro 500.
+@pytest.mark.parametrize(
+    "day, previous_day, next_day",
+    [("0001-01-01", None, "0001-01-02"), ("9999-12-31", "9999-12-30", None)],
+)
+def test_ends_of_the_calendar_have_a_null_neighbor(client, day, previous_day, next_day):
+    tasks = day_tasks(client, day)
+
+    assert tasks["previous_day"] == previous_day
+    assert tasks["next_day"] == next_day
+
+
+# Os casos da seção 4.2, com hoje em 01/11. Cada linha é um caso: os campos da tarefa, o dia
+# em que ela aparece (a atrasada aparece hoje) e se a data está travada. Para cada caso, a
+# trava da lista e a rota do Adiar precisam concordar.
+@pytest.mark.parametrize(
+    "fields, listed_day, expected_locked",
+    [
+        ({}, "2026-11-01", False),
+        ({"due_date": date(2026, 11, 5), "postponements": 2}, "2026-11-05", False),
+        ({"due_date": date(2026, 11, 6), "postponements": 3}, "2026-11-06", True),
+        ({"due_date": date(2026, 10, 30)}, "2026-11-01", False),
+        ({"due_date": date(2026, 10, 30), "postponements": 1}, "2026-11-01", True),
+        ({"due_date": date(2026, 10, 29)}, "2026-11-01", True),
+    ],
+)
+def test_due_date_locked_matches_the_postpone_route(
+    client, test_engine, fields, listed_day, expected_locked
+):
+    task_id = insert_task(test_engine, **fields)
+
+    task = listed_task(client, task_id, listed_day)
+    assert task["due_date_locked"] is expected_locked
+
+    response = client.post(f"/tasks/{task_id}/postpone", json={"shown_due_date": task["due_date"]})
+    if expected_locked:
+        assert response.status_code == 409
+        assert response.json() == {"detail": LOCKED_DATE_MESSAGE}
+    else:
+        assert response.status_code == 200
+
+
+# A concluída usa a mesma conta, sem exceção: concluída hoje, mas marcada para 3 dias atrás,
+# ela voltaria travada ao ser desmarcada.
+@pytest.mark.parametrize(
+    "due_date, expected_locked", [(date(2026, 11, 1), False), (date(2026, 10, 29), True)]
+)
+def test_completed_task_uses_the_same_lock_rule(client, test_engine, due_date, expected_locked):
+    task_id = insert_task(test_engine, due_date=due_date, **COMPLETED_FIELDS)
+
+    assert listed_task(client, task_id, "2026-11-01")["due_date_locked"] is expected_locked
+
+
+# Às 22h30 de 01/11 em Brasília já é 02/11 em UTC. Pelo dia de UTC, a tarefa de 30/10 teria 3
+# dias de atraso e estaria travada; pelo de Brasília, tem 2 e não está.
+@pytest.mark.parametrize(
+    "moment, expected_locked",
+    [
+        (datetime(2026, 11, 2, 1, 30, tzinfo=timezone.utc), False),
+        (datetime(2026, 11, 2, 3, 0, tzinfo=timezone.utc), True),
+    ],
+)
+def test_due_date_locked_uses_the_brasilia_day(
+    client, test_engine, monkeypatch, moment, expected_locked
+):
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 30))
+    set_now(monkeypatch, moment)
+
+    overdue = today_tasks(client)["overdue"]
+
+    assert ids(overdue) == [task_id]
+    assert overdue[0]["due_date_locked"] is expected_locked
+
+
+def test_pending_task_earned_no_xp(client):
+    task = create_task(client)
+
+    assert listed_task(client, task["id"], "2026-11-01")["xp_earned"] == 0
+
+
+# Cada linha é um caso: os campos da tarefa média e o XP que ela rende ao ser concluída hoje.
+# Com 1 dia de atraso vale 75% (18); com 2 adiamentos e 2 dias de atraso, 4 efetivos, vale 0.
+@pytest.mark.parametrize(
+    "fields, expected_xp",
+    [
+        ({}, 25),
+        ({"due_date": date(2026, 10, 31)}, 18),
+        ({"due_date": date(2026, 10, 30), "postponements": 2}, 0),
+    ],
+)
+def test_completed_task_shows_the_xp_it_earned(client, test_engine, fields, expected_xp):
+    task_id = insert_task(test_engine, difficulty="medium", **fields)
+
+    xp_change = complete_task(client, task_id)["xp_change"]
+
+    assert xp_change == expected_xp
+    assert listed_task(client, task_id, "2026-11-01")["xp_earned"] == expected_xp
+
+
+# Seção 4.3: a soma do histórico é o valor da última conclusão, não a soma de todos os ganhos.
+# A segunda conclusão é um dia depois, com 1 dia de atraso, para os dois valores serem
+# diferentes.
+def test_xp_earned_is_the_value_of_the_last_completion(client, monkeypatch):
+    task = create_task(client)
+
+    complete_task(client, task["id"])
+    uncomplete_task(client, task["id"])
+    assert listed_task(client, task["id"], "2026-11-01")["xp_earned"] == 0
+
+    set_now(monkeypatch, datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc))
+    complete_task(client, task["id"])
+
+    assert listed_task(client, task["id"], "2026-11-02")["xp_earned"] == 18
+
+
+# A soma de uma tarefa não leva as linhas de outra tarefa nem as linhas sem tarefa.
+def test_xp_earned_does_not_count_other_entries(client, test_engine):
+    task = create_task(client)
+    other_task = create_task(client, difficulty="hard")
+    complete_task(client, task["id"])
+    complete_task(client, other_task["id"])
+    insert_xp_entry(test_engine, 100, "Linha sem tarefa", None)
+
+    completed = day_tasks(client, "2026-11-01")["completed"]
+
+    assert {item["id"]: item["xp_earned"] for item in completed} == {
+        task["id"]: 25,
+        other_task["id"]: 50,
+    }
+
+
+# TaskView reaproveita os campos de Task. Se um campo novo entrar na tarefa, ele aparece na
+# lista do dia sem ninguém precisar lembrar.
+def test_task_view_has_every_task_field_and_two_more():
+    assert set(TaskView.model_fields) == set(Task.model_fields) | {"due_date_locked", "xp_earned"}
+
+
+# Os campos da tela ficam só na lista do dia: as outras respostas continuam iguais.
+def test_other_responses_do_not_have_the_screen_fields(client):
+    task = create_task(client)
+    week_task = week_tasks(client, "2026-11-01")[6]["tasks"][0]
+    completed = complete_task(client, task["id"])["task"]
+
+    for response_task in [task, week_task, completed]:
+        assert "due_date_locked" not in response_task
+        assert "xp_earned" not in response_task
+
+
+# /tasks/{task_id} só tem PUT e DELETE, e "today" não é um id: a rota nova não muda isso.
+def test_today_is_not_a_task_id(client):
+    assert client.put("/tasks/today", json=update_data()).status_code == 422
+    assert client.delete("/tasks/today").status_code == 422
 
 
 def test_week_without_tasks_returns_seven_empty_days(client):
@@ -900,7 +1140,7 @@ def test_update_appears_in_the_day_list(client):
 
     updated = update_task(client, task["id"])
 
-    assert day_tasks(client, task["due_date"])["pending"] == [updated]
+    assert day_tasks(client, task["due_date"])["pending"] == [as_listed(updated)]
 
 
 # O PUT substitui só o que o pedido pode definir. Os valores são diferentes dos padrões, para
@@ -1204,7 +1444,7 @@ def test_changed_date_moves_the_task_in_the_day_list(client):
 
     updated = update_task(client, task["id"], due_date="2026-11-05")
 
-    assert day_tasks(client, "2026-11-05")["pending"] == [updated]
+    assert day_tasks(client, "2026-11-05")["pending"] == [as_listed(updated)]
     assert day_tasks(client, "2026-11-01")["pending"] == []
 
 

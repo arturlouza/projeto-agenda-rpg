@@ -3,7 +3,14 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.dates import APP_TIMEZONE, app_day_bounds, app_today, to_app_date, week_days
+from app.dates import (
+    APP_TIMEZONE,
+    adjacent_days,
+    app_day_bounds,
+    app_today,
+    to_app_date,
+    week_days,
+)
 
 
 # O exemplo da seção 6.4: concluída às 22h30 de 31/10 em Brasília, gravada como 01h30 UTC.
@@ -147,3 +154,25 @@ def test_week_days_of_the_first_date_has_seven_days():
 
     assert len(days) == 7
     assert days[0] == date.min
+
+
+# Cada linha é um caso: o dia, o anterior e o seguinte. Inclui a virada de mês, a de ano e o
+# 29 de fevereiro de um ano bissexto.
+@pytest.mark.parametrize(
+    "day, expected",
+    [
+        (date(2026, 11, 4), (date(2026, 11, 3), date(2026, 11, 5))),
+        (date(2026, 11, 1), (date(2026, 10, 31), date(2026, 11, 2))),
+        (date(2026, 12, 31), (date(2026, 12, 30), date(2027, 1, 1))),
+        (date(2028, 3, 1), (date(2028, 2, 29), date(2028, 3, 2))),
+    ],
+)
+def test_adjacent_days_of_a_common_day(day, expected):
+    assert adjacent_days(day) == expected
+
+
+# O dia antes de 0001-01-01 e o dia depois de 9999-12-31 não existem no Python: somar ou
+# subtrair daria OverflowError.
+def test_adjacent_days_at_the_ends_of_the_calendar():
+    assert adjacent_days(date.min) == (None, date(1, 1, 2))
+    assert adjacent_days(date.max) == (date(9999, 12, 30), None)

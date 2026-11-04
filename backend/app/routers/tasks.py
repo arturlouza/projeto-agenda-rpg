@@ -3,10 +3,10 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Path, status
 from pydantic import ConfigDict, StringConstraints, field_validator
-from sqlmodel import Session, SQLModel, and_, or_, select, update
+from sqlmodel import Session, SQLModel, and_, col, func, or_, select, update
 
-from app.dates import app_day_bounds, app_today, week_days
-from app.models import DEFAULT_TASK_COLOR, Task, TaskType, XpEntry, utc_now
+from app.dates import adjacent_days, app_day_bounds, app_today, week_days
+from app.models import DEFAULT_TASK_COLOR, Task, TaskBase, TaskType, XpEntry, utc_now
 from app.routers.task_types import MAX_ID, SessionDep
 from app.rules.xp import (
     completion_reason,
@@ -84,11 +84,27 @@ class TaskPostpone(SQLModel):
     shown_due_date: date
 
 
-# O que a API devolve ao listar um dia: os três grupos da visão do dia (seção 6.2).
+# Uma tarefa como a visão do dia a recebe: todos os campos da tarefa, mais o que a tela não pode
+# calcular sozinha, porque são regras do servidor (regra 9 do CLAUDE.md).
+class TaskView(TaskBase):
+    # Se a data está travada agora (seção 4.2). Na concluída, diz se ela voltaria travada ao
+    # ser desmarcada; a tela não usa o campo nesse caso.
+    due_date_locked: bool
+    # Soma das linhas da tarefa no histórico: o XP que a concluída rendeu, 0 na pendente (4.3).
+    xp_earned: int
+
+
+# O que a API devolve ao listar um dia: a data listada, se ela é hoje em Brasília, os dias
+# vizinhos para a tela navegar sem fazer conta de data, e os três grupos da visão do dia (seção
+# 6.2). previous_day e next_day vêm como null quando o dia não existe.
 class DayTasks(SQLModel):
-    overdue: list[Task]
-    pending: list[Task]
-    completed: list[Task]
+    day: date
+    is_today: bool
+    previous_day: date | None
+    next_day: date | None
+    overdue: list[TaskView]
+    pending: list[TaskView]
+    completed: list[TaskView]
 
 
 # Um dia da visão da semana: pendentes e concluídas ficam na mesma lista (seção 6.2).
@@ -194,6 +210,65 @@ def completed_on(day: date):
     )
 
 
+# Soma o histórico de cada tarefa numa consulta só: o group_by junta as linhas pelo task_id, e o
+# banco soma cada grupo. Devolve {id da tarefa: soma}; tarefa sem linhas não aparece no resultado.
+def xp_earned_by_task(session: Session, task_ids: list[int]) -> dict[int, int]:
+    rows = session.exec(
+        select(XpEntry.task_id, func.sum(XpEntry.amount))
+        .where(col(XpEntry.task_id).in_(task_ids))
+        .group_by(XpEntry.task_id)
+    ).all()
+    return dict(rows)
+
+
+# Acrescenta à tarefa os dois campos da tela. "earned" é o resultado de xp_earned_by_task: a
+# tarefa que não está nele não tem linhas no histórico e rendeu 0. Os dias de atraso podem sair
+# negativos, com a data no futuro: as regras de xp.py tratam esse valor como 0.
+def task_view(task: Task, today: date, earned: dict[int, int]) -> TaskView:
+    days_late = (today - task.due_date).days
+    return TaskView.model_validate(
+        task,
+        update={
+            "due_date_locked": is_due_date_locked(task.postponements, days_late),
+            "xp_earned": earned.get(task.id, 0),
+        },
+    )
+
+
+# Monta a resposta da visão do dia. Quem chama lê o relógio uma vez e informa o "hoje", para as
+# atrasadas e a trava de todas as tarefas usarem o mesmo dia, mesmo à meia-noite. As atrasadas
+# só vêm na visão de hoje.
+def build_day_tasks(session: Session, day: date, today: date) -> DayTasks:
+    overdue = []
+    if day == today:
+        overdue = session.exec(
+            select(Task)
+            .where(Task.completed == False, Task.due_date < day)
+            .order_by(Task.due_date, Task.created_at, Task.id)
+        ).all()
+
+    pending = session.exec(
+        select(Task).where(pending_on(day)).order_by(Task.created_at, Task.id)
+    ).all()
+
+    completed = session.exec(
+        select(Task).where(completed_on(day)).order_by(Task.created_at, Task.id)
+    ).all()
+
+    earned = xp_earned_by_task(session, [task.id for task in [*overdue, *pending, *completed]])
+
+    previous_day, next_day = adjacent_days(day)
+    return DayTasks(
+        day=day,
+        is_today=day == today,
+        previous_day=previous_day,
+        next_day=next_day,
+        overdue=[task_view(task, today, earned) for task in overdue],
+        pending=[task_view(task, today, earned) for task in pending],
+        completed=[task_view(task, today, earned) for task in completed],
+    )
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_task(task_input: TaskInput, session: SessionDep) -> Task:
     ensure_date_is_not_past(task_input.due_date)
@@ -215,26 +290,17 @@ def create_task(task_input: TaskInput, session: SessionDep) -> Task:
     return task
 
 
-# As atrasadas só vêm na visão de hoje.
+# A visão de hoje em Brasília. A tela abre por aqui e nunca usa o relógio do celular para
+# decidir que dia é.
+@router.get("/today")
+def list_today_tasks(session: SessionDep) -> DayTasks:
+    today = app_today()
+    return build_day_tasks(session, today, today)
+
+
 @router.get("/day/{day}")
 def list_tasks_by_day(day: date, session: SessionDep) -> DayTasks:
-    overdue = []
-    if day == app_today():
-        overdue = session.exec(
-            select(Task)
-            .where(Task.completed == False, Task.due_date < day)
-            .order_by(Task.due_date, Task.created_at, Task.id)
-        ).all()
-
-    pending = session.exec(
-        select(Task).where(pending_on(day)).order_by(Task.created_at, Task.id)
-    ).all()
-
-    completed = session.exec(
-        select(Task).where(completed_on(day)).order_by(Task.created_at, Task.id)
-    ).all()
-
-    return DayTasks(overdue=overdue, pending=pending, completed=completed)
+    return build_day_tasks(session, day, app_today())
 
 
 # Faz uma consulta por dia, com os mesmos filtros da visão do dia. Aqui não há atrasadas:

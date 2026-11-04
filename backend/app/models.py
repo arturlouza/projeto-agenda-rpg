@@ -22,11 +22,10 @@ class TaskType(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
-# Algo a fazer num dia.
-class Task(SQLModel, table=True):
-    # Mesmo motivo do TaskType.
-    __table_args__ = {"sqlite_autoincrement": True}
-
+# Campos da tarefa. Ficam numa classe sem tabela para a resposta da visão do dia (TaskView, em
+# routers/tasks.py) reaproveitar os mesmos campos sem repetir a lista. A tabela continua igual:
+# Task herda tudo daqui, na mesma ordem.
+class TaskBase(SQLModel):
     id: int | None = Field(default=None, primary_key=True)
     title: str
     notes: str | None = None
@@ -38,6 +37,13 @@ class Task(SQLModel, table=True):
     completed_at: datetime | None = None
     postponements: int = 0
     created_at: datetime = Field(default_factory=utc_now)
+
+
+# Algo a fazer num dia. Os campos vêm de TaskBase; aqui fica só o que transforma a classe em
+# tabela do banco.
+class Task(TaskBase, table=True):
+    # Mesmo motivo do TaskType.
+    __table_args__ = {"sqlite_autoincrement": True}
 
 
 # Uma linha do histórico de XP. O XP total é a soma de todas as linhas.

@@ -507,7 +507,7 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 **Fora da tarefa 5:**
 
 - Concluir e desmarcar (tarefa 6), rota do Adiar (tarefa 7), front-end (tarefas 9 em diante).
-- Campo que diz à tela se a data está travada: as tarefas 10 e 11 vão precisar dele para bloquear o botão e o formulário sem repetir a regra em JavaScript. Ele entra quando a tela precisar, para não adiantar tarefa.
+- Campo que diz à tela se a data está travada: as tarefas 10 e 11 vão precisar dele para bloquear o botão e o formulário sem repetir a regra em JavaScript. Ele entra quando a tela precisar, para não adiantar tarefa. Resolvido na etapa 10.1 (`due_date_locked`).
 
 **Decisões da tarefa 6 (plano `06-concluir-e-desmarcar.md`):**
 
@@ -519,7 +519,7 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 
 **Fora da tarefa 6:**
 
-- XP no cartão da tarefa concluída (seção 6.3): a listagem precisa trazer esse valor. Ele entra quando a tela precisar, para não adiantar tarefa.
+- XP no cartão da tarefa concluída (seção 6.3): a listagem precisa trazer esse valor. Ele entra quando a tela precisar, para não adiantar tarefa. Resolvido na etapa 10.1 (`xp_earned`).
 - Resposta 409 na tela: na tarefa 10, o front-end recarrega a lista, porque o 409 só significa que a tela estava desatualizada.
 
 **Decisões da tarefa 7 (plano `07-botao-adiar.md`):**
@@ -564,6 +564,56 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 
 - `POST`, `PUT` ou `DELETE` num endereço que não existe dá 405 em vez de 404, porque o `StaticFiles` só aceita leitura. Nada é gravado.
 - O navegador pede `/favicon.ico` e recebe 404 até o ícone da tarefa 14.
+
+**Divisão da tarefa 10:**
+
+A tarefa 10 mexe na API e cria a maior parte do JavaScript do app, então vira 4 etapas, feitas nesta ordem. Cada etapa tem plano próprio, em sessão nova, e só começa depois do commit da anterior.
+
+Por que esta ordem: a API vem primeiro porque as três telas dependem dela, e assim todo o JavaScript nasce sem nenhuma conta de XP, de data ou de trava. A 10.2 fecha o critério da tarefa. O cartão que expande vem depois porque, sem os botões, ele mostraria um espaço vazio numa tarefa sem notas. A navegação fica por último, porque a tela de hoje já é útil sozinha.
+
+**Etapa 10.1: API da visão do dia**
+
+- **Entrega:** `GET /tasks/today`; a resposta do dia ganha `day`, `is_today`, `previous_day` e `next_day`; cada tarefa da resposta do dia ganha `due_date_locked` e `xp_earned`. Só back-end.
+- **Arquivos:** `backend/app/models.py`, `backend/app/dates.py`, `backend/app/routers/tasks.py`, `backend/tests/test_dates.py`, `backend/tests/test_tasks.py`.
+- **Como testar:** `pytest`. No `/docs`, `GET /tasks/today`, concluir uma tarefa e ver o `xp_earned`, adiar três vezes e ver o `due_date_locked`.
+- **Pronto quando:** a tela consegue saber o dia de hoje, a trava e o XP rendido sem nenhuma conta; a trava da lista concorda com a rota do Adiar; os testes antigos continuam passando.
+
+**Etapa 10.2: lista de hoje com a caixinha (fecha o critério da tarefa)**
+
+- **Entrega:** a tela abre por `GET /tasks/today` e nunca usa o relógio do celular. Atrasadas no topo, numa seção com destaque e a data marcada escrita no cartão, só formatada; some quando vazia. Pendentes na ordem da API. "Concluídas (N)" num `<details>`, fechada ao abrir o app e mantida aberta ao recarregar a lista se estava aberta; a concluída tem caixinha marcada, título riscado, cartão mais transparente e "+N XP" de `xp_earned`. Ícone de notas: um caractere simples, com texto para leitor de tela; a tarefa 13 troca pelo definitivo.
+- **Caixinha:** `<input type="checkbox">` num `<label>` de 48 px, `disabled` enquanto espera a resposta do `POST /tasks/{task_id}/complete` ou `/uncomplete`, por `fetch` no modo padrão. Depois, recarrega a lista e o topo (`GET /player`). Um 409 faz o mesmo, sem mensagem. Outro erro recarrega a lista e mostra "Não foi possível salvar. Tente de novo." O `apiRequest` passa a guardar o código da resposta no erro, para a tela reconhecer o 409 sem ler texto. Enquanto a tela estiver em hoje, recarrega por `/tasks/today`, e não pela data guardada, para a virada da meia-noite.
+- **Estados:** "Carregando tarefas…"; erro da API com "Não foi possível carregar as tarefas." e um botão "Tentar de novo"; "Nenhuma tarefa para hoje." com as três listas vazias.
+- **Arquivos:** `frontend/index.html`, `frontend/css/style.css`, `frontend/js/app.js`.
+- **Pronto quando:** dá para ver, concluir e desmarcar as tarefas de hoje, com o topo atualizado; o título `<img src=x onerror=alert(1)>` aparece como texto, sem alerta; o teste que recusa `innerHTML` continua passando.
+
+**Etapa 10.3: cartão que expande, com Adiar**
+
+- **Entrega:** o título vira um `<button>` com `aria-expanded`; tocar mostra as notas, com as quebras de linha, e o botão Adiar; tocar de novo recolhe. A caixinha fica separada do toque. O Adiar manda em `shown_due_date` a data recebida da lista e nunca calcula a data nova; fica bloqueado com `due_date_locked`; não aparece na concluída. O 409 recarrega a lista. O Editar fica para a tarefa 11.
+- **Arquivos:** os mesmos três da 10.2.
+- **A decidir no plano desta etapa:** como a tela mostra o 409 da última data possível (`9999-12-31`), que recarregar não resolve.
+
+**Etapa 10.4: navegar entre os dias**
+
+- **Entrega:** setas de dia anterior e seguinte, que pedem `GET /tasks/day/{previous_day}` e `{next_day}`, e o botão "Hoje", que pede `GET /tasks/today`. A seta fica bloqueada quando o vizinho vem `null`. Sem seletor de data por enquanto.
+- **Arquivos:** os mesmos três da 10.2.
+
+**Vale para as etapas 10.2 a 10.4:** caixinha, cartão, botões, setas e o `<summary>` das Concluídas com no mínimo `var(--touch-size)` (48 px); nada que dependa de passar o mouse por cima; foco visível para teclado; layout para 360 px, sem rolagem para o lado. Título e notas entram por `textContent`. Para escrever a data, o JavaScript só formata o texto que veio da API, com `Intl.DateTimeFormat` em `timeZone: "UTC"`, porque `new Date("2026-11-04")` é meia-noite em UTC e, formatado no fuso do celular, viraria 03/11.
+
+**Decisões da etapa 10.1 (plano `10.1-api-da-visao-do-dia.md`):**
+
+- **Que dia é hoje:** rota `GET /tasks/today`, só leitura, que devolve o mesmo que `GET /tasks/day/{day}` para o `app_today()`. A resposta traz `day` (a data listada) e `is_today`, então a tela sabe que dia está mostrando sem ler o relógio do celular. Uma rota, e não um campo no `/player`, porque o dia é da lista, e porque a tela precisaria da data antes do primeiro pedido.
+- **Um "hoje" por pedido:** as duas rotas leem o relógio uma vez e passam o valor para `build_day_tasks`, que o usa em `is_today`, nas atrasadas e na trava de todas as tarefas. Assim, um pedido à meia-noite não mistura dois dias.
+- **`due_date_locked`:** calculado com `is_due_date_locked`, de `rules/xp.py`, para toda tarefa da resposta do dia, inclusive a concluída, sem exceção. Na concluída, ele diz se a tarefa voltaria travada ao ser desmarcada; a tela não o usa, porque o Adiar não aparece e o formulário da tarefa 11 trava a data por `completed`. A última data possível não entra no campo.
+- **`xp_earned`:** a soma das linhas da tarefa no histórico, feita no banco com `func.sum` e `group_by`, numa consulta só para o dia inteiro. Pela seção 4.3, essa soma é o XP da última conclusão na concluída e 0 na pendente. Não é conta nova de XP. Entrou agora, e não na tarefa 13, porque o "+25 XP" é conteúdo do cartão; a 13 cuida do visual e da animação.
+- **Só na listagem do dia:** criar, editar, concluir, desmarcar e adiar continuam devolvendo a tarefa como antes, porque a tela recarrega a lista depois de cada ação. A semana também continua igual.
+- **`previous_day` e `next_day`:** calculados em `adjacent_days`, em `dates.py`, para o JavaScript não somar um dia a uma data. Em `0001-01-01` e `9999-12-31`, o vizinho que não existe vem `null`, em vez de `OverflowError`.
+- **`TaskBase`:** os campos da tarefa passaram para uma classe sem tabela, e `Task` herda dela. A resposta do dia (`TaskView`) herda os mesmos campos e acrescenta os dois novos, sem repetir a lista. Conferido: o `CREATE TABLE task` saiu idêntico, então nada muda no `agenda.db`. Herdar direto de `Task` não tem suporte no SQLModel, e pôr a tarefa dentro de outro objeto mudaria o formato que a lista já tinha.
+- **`/tasks/today` não é um id:** `PUT` e `DELETE` em `/tasks/today` continuam dando 422.
+
+**Fora da etapa 10.1:**
+
+- A semana (`GET /tasks/week/{day}`) sem os campos novos: decidir na tarefa 12, junto com o toque no cartão da semana.
+- O 409 da última data possível no Adiar: decidir na etapa 10.3.
 
 **Detalhe sobre testar no celular:** antes da publicação, o teste é pelo cabo USB, abrindo `http://localhost:8000` no celular, como explica a seção 6.7. Como `localhost` é origem segura, o service worker e a instalação já podem ser testados assim. A instalação definitiva vem na tarefa 17.
 
@@ -638,11 +688,11 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | --- | --- | --- | --- | --- |
 | `backend/app/main.py` | Cria o app FastAPI, cria o banco ao iniciar, registra as rotas, liga a CSP e entrega a pasta `frontend/` quando nenhuma rota casa. | `lifespan`, `GET /health`, `FRONTEND_DIR`, `CONTENT_SECURITY_POLICY`, `DOCS_PATHS`, `add_content_security_policy` | 2, 6.5, 6.7 | `test_health.py`, `test_database.py`, `test_frontend.py` |
 | `backend/app/database.py` | Conecta ao banco, entrega a sessão e liga as chaves estrangeiras no SQLite. | `DATABASE_URL`, `create_db_and_tables`, `get_session`, `enable_sqlite_foreign_keys` | 2, 6.6 | `test_database.py` |
-| `backend/app/models.py` | Define as três tabelas do banco. | `TaskType`, `Task`, `XpEntry`, `utc_now`, `DEFAULT_TASK_COLOR` | 6.1, 6.4, 6.6 | `test_database.py` |
-| `backend/app/dates.py` | Responde "que dia é" no horário de Brasília. | `APP_TIMEZONE`, `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4, 6.2 | `test_dates.py` |
+| `backend/app/models.py` | Define as três tabelas do banco e a base com os campos da tarefa, reaproveitada pela resposta da visão do dia. | `TaskType`, `TaskBase`, `Task`, `XpEntry`, `utc_now`, `DEFAULT_TASK_COLOR` | 6.1, 6.4, 6.6 | `test_database.py`, `test_tasks.py` |
+| `backend/app/dates.py` | Responde "que dia é" no horário de Brasília, e quais são o dia anterior e o seguinte. | `APP_TIMEZONE`, `to_app_date`, `app_today`, `app_day_bounds`, `adjacent_days`, `week_days` | 6.4, 6.2 | `test_dates.py` |
 | `backend/app/rules/xp.py` | Guarda as regras de XP, adiamento, devolução, nível e barra, com os números no topo, e os textos do histórico. | `task_xp`, `effective_postponements`, `is_due_date_locked`, `postponements_after_date_change`, `postponed_due_date`, `xp_to_refund`, `completion_reason`, `uncompletion_reason`, `xp_to_next_level`, `level_progress`, `progress_percent` | 4.1, 4.2, 4.3, 4.4, 4.5 | `test_xp.py` |
 | `backend/app/routers/task_types.py` | API dos tipos de tarefa; também define `SessionDep` e `MAX_ID`, usados em `tasks.py`. | `POST /task-types`, `GET /task-types`, `PATCH /task-types/{task_type_id}`, `DELETE /task-types/{task_type_id}` | 6.1, 6.6 | `test_task_types.py` |
-| `backend/app/routers/tasks.py` | API das tarefas: criar, listar por dia e semana, editar (inclusive a data), excluir, concluir, desmarcar e adiar. | `POST /tasks`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `POST /tasks/{task_id}/complete`, `POST /tasks/{task_id}/uncomplete`, `POST /tasks/{task_id}/postpone`, `ensure_date_is_not_past`, `ensure_due_date_can_change`, `change_due_date`, `change_completed` | 6.1, 6.2, 4.2, 4.3, 4.4 | `test_tasks.py` |
+| `backend/app/routers/tasks.py` | API das tarefas: criar, listar hoje, por dia e por semana, editar (inclusive a data), excluir, concluir, desmarcar e adiar. A lista do dia traz, em cada tarefa, a trava da data e o XP rendido. | `POST /tasks`, `GET /tasks/today`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `POST /tasks/{task_id}/complete`, `POST /tasks/{task_id}/uncomplete`, `POST /tasks/{task_id}/postpone`, `TaskView`, `DayTasks`, `build_day_tasks`, `task_view`, `xp_earned_by_task`, `ensure_date_is_not_past`, `ensure_due_date_can_change`, `change_due_date`, `change_completed` | 6.1, 6.2, 4.2, 4.3, 4.4 | `test_tasks.py` |
 | `backend/app/routers/player.py` | API do jogador: soma o histórico e devolve XP total, nível e barra. | `GET /player`, `Player` | 4.4, 4.5, 6.2 | `test_player.py` |
 | `frontend/index.html` | A página do app: por enquanto, só o topo fixo com nível, XP e barra. | `#player-level`, `#player-xp`, `#player-progress`, `#player-message` | 6.2, 6.7 | `test_frontend.py` |
 | `frontend/css/style.css` | O visual: variáveis de cores e espaçamentos, layout de celular, topo e barra. | variáveis em `:root`, `.top-bar`, `.xp-bar` | 6.3, 6.7 | `test_frontend.py` |
@@ -650,10 +700,10 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | `backend/tests/conftest.py` | Reúne o que os testes de banco e de API têm em comum. O pytest carrega este arquivo sozinho. | `empty_engine`, `test_engine`, `client` | não se aplica | não se aplica |
 | `backend/tests/test_health.py` | Testa a rota `/health`. | `test_health_returns_ok` | 10 (tarefa 1) | não se aplica |
 | `backend/tests/test_database.py` | Testa a criação das tabelas ao iniciar, os valores padrão, as chaves estrangeiras e o AUTOINCREMENT só no SQLite. | `test_app_startup_creates_tables`, `test_task_with_unknown_task_type_is_refused`, `test_xp_entry_with_unknown_task_is_refused`, `test_autoincrement_exists_only_on_sqlite` | 6.1, 6.6 | não se aplica |
-| `backend/tests/test_dates.py` | Testa o fuso, o "hoje", os limites do dia e a semana. | testes de `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4 | não se aplica |
+| `backend/tests/test_dates.py` | Testa o fuso, o "hoje", os limites do dia, os dias vizinhos e a semana. | testes de `to_app_date`, `app_today`, `app_day_bounds`, `adjacent_days`, `week_days` | 6.4 | não se aplica |
 | `backend/tests/test_xp.py` | Testa XP, adiamentos, trava da data, data nova do Adiar, devolução, textos do histórico, níveis e barra, inclusive um total enorme. | testes de cada função de `xp.py` | 4.1, 4.2, 4.3, 4.4, 4.5 | não se aplica |
 | `backend/tests/test_task_types.py` | Testa a API dos tipos de tarefa. | testes de criar, listar, renomear e excluir, de campo desconhecido e de id que não volta | 6.1, 6.6 | não se aplica |
-| `backend/tests/test_tasks.py` | Testa a API das tarefas, com o "hoje" fixo em todos os testes do arquivo. | `fixed_today`, auxiliares `set_now`, `insert_task`, `insert_xp_entry`, `update_data`, `complete_task`, `uncomplete_task`, `postpone_task`, `assert_postpone_refused`, `xp_total` | 6.1, 6.2, 6.6, 4.2, 4.3, 4.4 | não se aplica |
+| `backend/tests/test_tasks.py` | Testa a API das tarefas, com o "hoje" fixo em todos os testes do arquivo, inclusive a visão de hoje, a trava e o XP rendido na lista do dia. | `fixed_today`, auxiliares `set_now`, `insert_task`, `insert_xp_entry`, `update_data`, `complete_task`, `uncomplete_task`, `postpone_task`, `assert_postpone_refused`, `xp_total`, `groups`, `as_listed`, `today_tasks`, `listed_task` | 6.1, 6.2, 6.6, 4.2, 4.3, 4.4 | não se aplica |
 | `backend/tests/test_player.py` | Testa a API do jogador, com o "hoje" fixo: fronteiras da tabela 4.5, histórico vazio, soma negativa, total enorme e a ligação com concluir, desmarcar e excluir. | `fixed_today`, auxiliares `get_player`, `player`, `insert_xp`, `create_medium_task` | 4.3, 4.4, 4.5, 6.7 | não se aplica |
 | `backend/tests/test_frontend.py` | Testa a entrega do front: a página abre com a CSP, nada de `backend/` fica acessível, o `/docs` abre sem CSP, a API responde como antes e os `.js` não usam `innerHTML` e parecidos. | `EXPECTED_CSP`, `FORBIDDEN_IN_JAVASCRIPT` | 6.5, 6.7, 10 (tarefa 9) | não se aplica |
 | `backend/requirements.txt` | Fixa as versões das dependências. | não se aplica | 2 | não se aplica |
