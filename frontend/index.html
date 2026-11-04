@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agenda RPG</title>
+  <link rel="stylesheet" href="css/style.css">
+  <!-- defer: o script só roda depois de o HTML inteiro estar pronto. -->
+  <script src="js/app.js" defer></script>
+</head>
+<body>
+  <!-- Topo fixo: nível, XP e barra, preenchidos pelo app.js com o que veio do GET /player. -->
+  <header class="top-bar">
+    <div class="top-bar-content">
+      <div class="top-bar-row">
+        <span id="player-level" class="player-level">Nível</span>
+        <span id="player-xp" class="player-xp"></span>
+      </div>
+      <progress id="player-progress" class="xp-bar" max="100" value="0"
+                aria-label="Progresso até o próximo nível"></progress>
+      <p id="player-message" class="player-message" role="status">Carregando…</p>
+    </div>
+  </header>
+
+  <!-- As tarefas do dia entram aqui na tarefa 10. -->
+  <main class="content"></main>
+</body>
+</html>

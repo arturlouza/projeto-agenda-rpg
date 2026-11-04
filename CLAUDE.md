@@ -36,6 +36,7 @@ Sou dev júnior, em transição de carreira, aprendendo Python e desenvolvimento
 ## Exceções aprovadas
 
 - **`PRAGMA foreign_keys=ON` em `backend/app/database.py`:** é a única exceção à regra de nunca escrever SQL à mão. O SQLite não confere chaves estrangeiras por padrão e o PostgreSQL confere, então sem esse comando o desenvolvimento se comportaria diferente da produção. O comando só roda quando o banco é SQLite.
+- **`app.router.default` no lugar de `app.mount("/")` em `backend/app/main.py`:** a seção 10 dizia que o `StaticFiles` "monta" a pasta `frontend/`. Montado em `/`, ele casa com qualquer caminho e ganha das rotas da API que casam só pelo caminho: um `GET /tasks/1/complete` daria 404 em vez de 405. Como resposta padrão do roteador, ele só roda quando nenhuma rota da API casou, e a API responde como antes. Aprovado no plano `09-front-end-base.md`.
 
 ## Stack
 

@@ -1,0 +1,139 @@
+import re
+from pathlib import Path
+
+import pytest
+
+# As pastas são achadas a partir deste arquivo: tests/ está em backend/, que está na raiz.
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+
+# Escrita por extenso, copiada da seção 10, para pegar uma mudança acidental em main.py.
+EXPECTED_CSP = (
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
+    "connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; "
+    "form-action 'none'"
+)
+
+# Seção 6.7: dados entram na tela só por textContent ou value. O eval é procurado como
+# palavra inteira, para uma palavra como "retrieval" não reprovar o arquivo.
+FORBIDDEN_IN_JAVASCRIPT = [
+    r"innerHTML",
+    r"outerHTML",
+    r"insertAdjacentHTML",
+    r"document\.write",
+    r"\beval\b",
+]
+
+
+def test_main_page_opens_with_the_csp(client):
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["content-security-policy"] == EXPECTED_CSP
+
+
+# O tipo vem do Python, que no Windows pode lê-lo do registro do sistema. Com o tipo errado,
+# o navegador recusa o estilo ou o script, e a página quebra sem aviso.
+@pytest.mark.parametrize(
+    ("path", "content_type"),
+    [("/css/style.css", "text/css"), ("/js/app.js", "text/javascript")],
+)
+def test_frontend_files_open_with_the_csp(client, path, content_type):
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith(content_type)
+    assert response.headers["content-security-policy"] == EXPECTED_CSP
+
+
+@pytest.mark.parametrize("path", ["/agenda.db", "/.env"])
+def test_database_and_secrets_are_not_served(client, path):
+    response = client.get(path)
+
+    assert response.status_code == 404
+
+
+# Só olha o código de status, nunca o conteúdo: se algum arquivo vazasse, o teste falharia
+# sem mostrar o que tem dentro dele.
+def test_no_backend_file_is_reachable(client):
+    backend_files = [path for path in BACKEND_DIR.rglob("*") if path.is_file()]
+    assert backend_files
+
+    for path in backend_files:
+        relative_path = path.relative_to(BACKEND_DIR).as_posix()
+        for url in [f"/{relative_path}", f"/backend/{relative_path}"]:
+            assert client.get(url).status_code == 404, url
+
+
+# Tentativas de sair da pasta frontend/ com ".." escondido de vários jeitos.
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/%2e%2e/backend/agenda.db",
+        "/..%2fbackend%2fagenda.db",
+        "/css/..%2f..%2fbackend/requirements.txt",
+        "/..\\backend\\agenda.db",
+        "/%5c..%5cbackend%5cagenda.db",
+    ],
+)
+def test_paths_cannot_leave_the_frontend_folder(client, path):
+    response = client.get(path)
+
+    assert response.status_code == 404
+
+
+# O uvicorn é ligado de dentro de backend/, mas a pasta do front não pode depender disso.
+def test_frontend_does_not_depend_on_the_current_folder(client, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+
+
+# As páginas da documentação carregam scripts de fora e inline, então ficam sem CSP.
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/docs/oauth2-redirect"])
+def test_documentation_pages_open_without_the_csp(client, path):
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert "content-security-policy" not in response.headers
+
+
+def test_docs_still_loads_swagger(client):
+    assert "swagger-ui" in client.get("/docs").text
+    assert client.get("/openapi.json").status_code == 200
+
+
+def test_api_answers_as_before(client):
+    health = client.get("/health")
+    player = client.get("/player")
+
+    assert health.json() == {"status": "ok"}
+    assert player.json() == {
+        "total_xp": 0,
+        "level": 1,
+        "xp_into_level": 0,
+        "xp_for_next_level": 100,
+        "progress_percent": 0,
+    }
+
+
+# Com o front montado em "/", estes pedidos virariam 404. A API tem que vir antes do front.
+@pytest.mark.parametrize("path", ["/tasks", "/tasks/1/complete", "/tasks/1/postpone"])
+def test_wrong_method_on_api_route_is_still_405(client, path):
+    response = client.get(path)
+
+    assert response.status_code == 405
+    assert response.json() == {"detail": "Method Not Allowed"}
+
+
+def test_javascript_never_writes_html_or_evaluates_text():
+    javascript_files = sorted(FRONTEND_DIR.rglob("*.js"))
+    assert javascript_files
+
+    for javascript_file in javascript_files:
+        text = javascript_file.read_text(encoding="utf-8")
+        for pattern in FORBIDDEN_IN_JAVASCRIPT:
+            assert re.search(pattern, text) is None, f"{javascript_file.name} usa {pattern}"

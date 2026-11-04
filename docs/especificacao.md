@@ -550,11 +550,26 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 - **Comemoração ao subir de nível (tarefa 13):** depois de concluir, a tela pede o `/player` de novo para atualizar a barra. Ela compara o `level` novo com o que estava mostrando e, se for maior, mostra a comemoração. Não precisa de campo novo, e o JavaScript só compara dois números vindos do servidor, sem conta de XP. Ao abrir o app não há comparação, então não há comemoração falsa. Desmarcar e concluir de novo comemora outra vez, o que é inofensivo. Alternativa, se o segundo pedido incomodar: a resposta de concluir traz o nível. Decidir na tarefa 13.
 - **Limite da porcentagem inteira:** no nível 100, 1% são 20,7 XP, então uma tarefa fácil às vezes não move a porcentagem. O XP ganho aparece no "+XP" ao concluir (seção 6.3).
 
+**Decisões da tarefa 9 (plano `09-front-end-base.md`):**
+
+- **Entrega do front:** o `StaticFiles` é a resposta padrão do roteador (`app.router.default`), e não um `app.mount("/")`. O roteador só chega a ele quando nenhuma rota da API casou com o pedido, nem pelo caminho. Com o `mount`, um `GET` numa rota que só aceita `POST`, como `/tasks/1/complete`, daria 404 em vez de 405, porque o `mount` em `/` casa com qualquer caminho e ganha da rota que casou só pelo caminho. Exceção registrada no `CLAUDE.md`. `default` é um parâmetro do `Router` do Starlette, não uma opção do FastAPI: se uma atualização mudar isso, os testes de 405 e o da página principal falham.
+- **Caminho da pasta:** `FRONTEND_DIR` é achado a partir do próprio `main.py` (`Path(__file__).resolve().parents[2]`), então não depende da pasta em que o servidor foi ligado. Sem a pasta, o app recusa subir.
+- **CSP:** vale para todas as respostas, menos as três páginas da documentação (`/docs`, `/redoc` e `/docs/oauth2-redirect`), que carregam scripts de fora e inline. Os caminhos vêm de `app.docs_url` e companhia. Esquecer um caso deixa a resposta com a CSP, e não sem ela.
+- **Arquivos:** `index.html`, `css/style.css` e `js/app.js`, sem módulos. `API_BASE = "./"` e a função única `apiRequest` ficam no topo de `app.js`.
+- **Topo:** mostra "Nível N", "`xp_into_level` / `xp_for_next_level` XP" e a barra. "Faltam X XP" exigiria uma subtração no JavaScript, então não aparece. A barra é um `<progress>`, que recebe a porcentagem por `value`. Números com ponto de milhar, por `Intl.NumberFormat("pt-BR")`, que só formata.
+- **Carregando e erro:** o HTML nasce com "Carregando…" e a barra em 0. Se a rede ou a API falhar, a mesma linha mostra o aviso de erro, e o erro completo vai para o console.
+- **Visual:** cores, espaçamentos e tamanhos ficam em variáveis de CSS no `:root`, para a tarefa 13 trocar num lugar só. Fonte do sistema, sem nenhum recurso de fora.
+
+**Fora da tarefa 9:**
+
+- `POST`, `PUT` ou `DELETE` num endereço que não existe dá 405 em vez de 404, porque o `StaticFiles` só aceita leitura. Nada é gravado.
+- O navegador pede `/favicon.ico` e recebe 404 até o ícone da tarefa 14.
+
 **Detalhe sobre testar no celular:** antes da publicação, o teste é pelo cabo USB, abrindo `http://localhost:8000` no celular, como explica a seção 6.7. Como `localhost` é origem segura, o service worker e a instalação já podem ser testados assim. A instalação definitiva vem na tarefa 17.
 
 **Segurança nas tarefas 9 a 14 (regras na seção 6.7):**
 
-- **Tarefa 9:** o `StaticFiles` monta só a pasta `frontend/`, depois das rotas da API, valendo também para produção. A CSP vai por cabeçalho: `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'`. Por isso, JavaScript e CSS ficam em arquivos, sem `onclick` no HTML. Um teste do pytest lê os `.js` de `frontend/` e falha se achar `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write` ou `eval`.
+- **Tarefa 9:** o `StaticFiles` entrega só a pasta `frontend/`, como resposta padrão do roteador, depois das rotas da API, valendo também para produção (ver as decisões da tarefa 9). A CSP vai por cabeçalho: `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'`. Por isso, JavaScript e CSS ficam em arquivos, sem `onclick` no HTML. Um teste do pytest lê os `.js` de `frontend/` e falha se achar `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write` ou `eval`.
 - **Tarefa 10:** título e notas entram por `textContent`. Teste manual: criar uma tarefa com título em forma de HTML e ver que ele aparece como texto.
 - **Tarefa 11:** os campos do formulário usam `value`, o nome do tipo usa `textContent` e a cor usa `style.backgroundColor`.
 - **Tarefas 12 e 13:** a mesma regra. Na 13, fontes e ícones são locais.
@@ -621,7 +636,7 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 
 | Arquivo | O que faz | Funções ou rotas principais | Regras | Teste que protege |
 | --- | --- | --- | --- | --- |
-| `backend/app/main.py` | Cria o app FastAPI, cria o banco ao iniciar e registra as rotas. | `lifespan`, `GET /health` | 2 | `test_health.py`, `test_database.py` |
+| `backend/app/main.py` | Cria o app FastAPI, cria o banco ao iniciar, registra as rotas, liga a CSP e entrega a pasta `frontend/` quando nenhuma rota casa. | `lifespan`, `GET /health`, `FRONTEND_DIR`, `CONTENT_SECURITY_POLICY`, `DOCS_PATHS`, `add_content_security_policy` | 2, 6.5, 6.7 | `test_health.py`, `test_database.py`, `test_frontend.py` |
 | `backend/app/database.py` | Conecta ao banco, entrega a sessão e liga as chaves estrangeiras no SQLite. | `DATABASE_URL`, `create_db_and_tables`, `get_session`, `enable_sqlite_foreign_keys` | 2, 6.6 | `test_database.py` |
 | `backend/app/models.py` | Define as três tabelas do banco. | `TaskType`, `Task`, `XpEntry`, `utc_now`, `DEFAULT_TASK_COLOR` | 6.1, 6.4, 6.6 | `test_database.py` |
 | `backend/app/dates.py` | Responde "que dia é" no horário de Brasília. | `APP_TIMEZONE`, `to_app_date`, `app_today`, `app_day_bounds`, `week_days` | 6.4, 6.2 | `test_dates.py` |
@@ -629,6 +644,9 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | `backend/app/routers/task_types.py` | API dos tipos de tarefa; também define `SessionDep` e `MAX_ID`, usados em `tasks.py`. | `POST /task-types`, `GET /task-types`, `PATCH /task-types/{task_type_id}`, `DELETE /task-types/{task_type_id}` | 6.1, 6.6 | `test_task_types.py` |
 | `backend/app/routers/tasks.py` | API das tarefas: criar, listar por dia e semana, editar (inclusive a data), excluir, concluir, desmarcar e adiar. | `POST /tasks`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `POST /tasks/{task_id}/complete`, `POST /tasks/{task_id}/uncomplete`, `POST /tasks/{task_id}/postpone`, `ensure_date_is_not_past`, `ensure_due_date_can_change`, `change_due_date`, `change_completed` | 6.1, 6.2, 4.2, 4.3, 4.4 | `test_tasks.py` |
 | `backend/app/routers/player.py` | API do jogador: soma o histórico e devolve XP total, nível e barra. | `GET /player`, `Player` | 4.4, 4.5, 6.2 | `test_player.py` |
+| `frontend/index.html` | A página do app: por enquanto, só o topo fixo com nível, XP e barra. | `#player-level`, `#player-xp`, `#player-progress`, `#player-message` | 6.2, 6.7 | `test_frontend.py` |
+| `frontend/css/style.css` | O visual: variáveis de cores e espaçamentos, layout de celular, topo e barra. | variáveis em `:root`, `.top-bar`, `.xp-bar` | 6.3, 6.7 | `test_frontend.py` |
+| `frontend/js/app.js` | Chama a API e mostra no topo o que o `GET /player` devolveu, sem conta de XP. | `API_BASE`, `apiRequest`, `showPlayer`, `loadPlayer` | 6.2, 6.5, 6.7 | `test_frontend.py` (só a proibição de `innerHTML` e parecidos) |
 | `backend/tests/conftest.py` | Reúne o que os testes de banco e de API têm em comum. O pytest carrega este arquivo sozinho. | `empty_engine`, `test_engine`, `client` | não se aplica | não se aplica |
 | `backend/tests/test_health.py` | Testa a rota `/health`. | `test_health_returns_ok` | 10 (tarefa 1) | não se aplica |
 | `backend/tests/test_database.py` | Testa a criação das tabelas ao iniciar, os valores padrão, as chaves estrangeiras e o AUTOINCREMENT só no SQLite. | `test_app_startup_creates_tables`, `test_task_with_unknown_task_type_is_refused`, `test_xp_entry_with_unknown_task_is_refused`, `test_autoincrement_exists_only_on_sqlite` | 6.1, 6.6 | não se aplica |
@@ -637,6 +655,7 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | `backend/tests/test_task_types.py` | Testa a API dos tipos de tarefa. | testes de criar, listar, renomear e excluir, de campo desconhecido e de id que não volta | 6.1, 6.6 | não se aplica |
 | `backend/tests/test_tasks.py` | Testa a API das tarefas, com o "hoje" fixo em todos os testes do arquivo. | `fixed_today`, auxiliares `set_now`, `insert_task`, `insert_xp_entry`, `update_data`, `complete_task`, `uncomplete_task`, `postpone_task`, `assert_postpone_refused`, `xp_total` | 6.1, 6.2, 6.6, 4.2, 4.3, 4.4 | não se aplica |
 | `backend/tests/test_player.py` | Testa a API do jogador, com o "hoje" fixo: fronteiras da tabela 4.5, histórico vazio, soma negativa, total enorme e a ligação com concluir, desmarcar e excluir. | `fixed_today`, auxiliares `get_player`, `player`, `insert_xp`, `create_medium_task` | 4.3, 4.4, 4.5, 6.7 | não se aplica |
+| `backend/tests/test_frontend.py` | Testa a entrega do front: a página abre com a CSP, nada de `backend/` fica acessível, o `/docs` abre sem CSP, a API responde como antes e os `.js` não usam `innerHTML` e parecidos. | `EXPECTED_CSP`, `FORBIDDEN_IN_JAVASCRIPT` | 6.5, 6.7, 10 (tarefa 9) | não se aplica |
 | `backend/requirements.txt` | Fixa as versões das dependências. | não se aplica | 2 | não se aplica |
 | `backend/pytest.ini` | Faz o pytest encontrar a pasta `app`. | `pythonpath` | não se aplica | não se aplica |
 | `.gitignore` | Diz o que fica fora do Git. | não se aplica | não se aplica | não se aplica |

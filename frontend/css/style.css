@@ -1,0 +1,109 @@
+/* Cores, espaçamentos e tamanhos num lugar só: a tarefa 13 troca o visual mexendo aqui. */
+:root {
+  --color-background: #f4f1ea;
+  --color-surface: #ffffff;
+  --color-text: #222222;
+  --color-text-muted: #5c5c5c;
+  --color-accent: #2f6f4f;
+  --color-bar-track: #ddd6c8;
+  --color-error: #a12622;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+
+  --radius: 8px;
+  --bar-height: 12px;
+  --touch-size: 48px; /* menor área de toque recomendada no Android, para os botões da tarefa 10 */
+  --content-max-width: 40rem;
+
+  --font-size-base: 16px;
+  --font-size-large: 20px;
+}
+
+/* A largura de um elemento passa a incluir a borda e o espaçamento interno. */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-family: system-ui, sans-serif;
+  font-size: var(--font-size-base);
+  line-height: 1.5;
+}
+
+/* sticky: o topo rola junto até encostar no alto da tela e fica preso ali. */
+.top-bar {
+  position: sticky;
+  top: 0;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-bar-track);
+}
+
+/* No celular ocupa a tela toda; no computador fica centralizado, com largura máxima. */
+.top-bar-content,
+.content {
+  max-width: var(--content-max-width);
+  margin: 0 auto;
+  padding: var(--space-3);
+}
+
+.top-bar-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.player-level {
+  font-size: var(--font-size-large);
+  font-weight: bold;
+}
+
+.player-xp {
+  color: var(--color-text-muted);
+}
+
+/* A barra de XP. appearance: none tira o visual padrão do navegador para as regras abaixo valerem. */
+.xp-bar {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: var(--bar-height);
+  border: none;
+  border-radius: var(--radius);
+  background: var(--color-bar-track);
+  overflow: hidden;
+}
+
+/* Chrome (inclusive no Android): o trilho da barra. */
+.xp-bar::-webkit-progress-bar {
+  background: var(--color-bar-track);
+  border-radius: var(--radius);
+}
+
+/* Chrome: a parte preenchida. */
+.xp-bar::-webkit-progress-value {
+  background: var(--color-accent);
+  border-radius: var(--radius);
+}
+
+/* Firefox: a parte preenchida. */
+.xp-bar::-moz-progress-bar {
+  background: var(--color-accent);
+  border-radius: var(--radius);
+}
+
+.player-message {
+  margin: var(--space-2) 0 0;
+  color: var(--color-text-muted);
+}
+
+.player-message.is-error {
+  color: var(--color-error);
+}
