@@ -22,6 +22,9 @@
       <!-- Aviso de erro ao concluir ou desmarcar. Fica no topo fixo para ser visto mesmo com a
            lista rolada. O app.js escreve o texto quando precisa. -->
       <p id="save-message" class="player-message is-error" role="status" hidden></p>
+      <!-- Aviso de que a tarefa foi adiada, com a data nova que o servidor devolveu. Fica no
+           topo porque a tarefa adiada sai da lista de hoje. -->
+      <p id="postpone-notice" class="player-message" role="status" hidden></p>
     </div>
   </header>
 
@@ -57,7 +60,8 @@
 
   <!-- Modelo do cartão de uma tarefa. O navegador não mostra o que está num <template>: o app.js
        copia este modelo para cada tarefa e preenche os textos. No <label>, a caixinha de
-       concluir; o texto escondido da vista dá a ela o nome da tarefa para o leitor de tela. -->
+       concluir; o texto escondido da vista dá a ela o nome da tarefa para o leitor de tela.
+       O botão do título abre e fecha a parte de baixo (.task-details), com as notas e o Adiar. -->
   <template id="task-card-template">
     <li class="task-card">
       <label class="task-check">
@@ -65,10 +69,20 @@
         <span class="task-check-name visually-hidden"></span>
       </label>
       <div class="task-body">
-        <span class="task-title"></span>
-        <span class="task-notes-icon" hidden><span aria-hidden="true">✎</span><span class="visually-hidden">Tem notas.</span></span>
-        <span class="task-due-date" hidden></span>
-        <span class="task-xp" hidden></span>
+        <button type="button" class="task-toggle" aria-expanded="false">
+          <span class="task-title"></span>
+          <span class="task-notes-icon" hidden><span aria-hidden="true">✎</span><span class="visually-hidden">Tem notas.</span></span>
+          <span class="task-due-date" hidden></span>
+          <span class="task-xp" hidden></span>
+        </button>
+        <div class="task-details" hidden>
+          <p class="task-notes" hidden></p>
+          <p class="task-no-notes" hidden>Sem notas.</p>
+          <div class="task-postpone-area">
+            <button type="button" class="button task-postpone">Adiar</button>
+            <p class="task-postpone-locked" hidden>Data travada: esta tarefa chegou ao limite de adiamentos.</p>
+          </div>
+        </div>
       </div>
     </li>
   </template>

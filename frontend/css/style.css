@@ -111,9 +111,12 @@ body {
   border-radius: var(--radius);
 }
 
+/* overflow-wrap: anywhere: o aviso do Adiar leva o título, e um título longo sem espaços
+   quebra a linha em vez de empurrar a tela para o lado. */
 .player-message {
   margin: var(--space-2) 0 0;
   color: var(--color-text-muted);
+  overflow-wrap: anywhere;
 }
 
 .player-message.is-error {
@@ -136,6 +139,7 @@ body {
 
 /* Anel de foco só para quem navega pelo teclado. Nada na tela depende de passar o mouse. */
 .task-checkbox:focus-visible,
+.task-toggle:focus-visible,
 .completed-section > summary:focus-visible,
 .button:focus-visible {
   outline: 3px solid var(--color-focus);
@@ -163,6 +167,21 @@ body {
   font: inherit;
   font-weight: bold;
   cursor: pointer;
+}
+
+/* Botão bloqueado: o Adiar da tarefa travada e os botões durante uma gravação. */
+.button:disabled {
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+/* O Adiar pedindo confirmação: outra cor, sem animação nem piscar (seção 6.3). O texto branco
+   sobre a cor de aviso tem contraste de 4,7 para 1. */
+.button.is-confirming {
+  border-color: var(--color-warning);
+  background: var(--color-warning);
+  color: var(--color-surface);
 }
 
 .task-section {
@@ -217,11 +236,49 @@ body {
 .task-body {
   flex: 1;
   min-width: 0;
+}
+
+/* O botão do título ocupa a largura do cartão, com 48 px de altura no mínimo. As regras tiram
+   o visual padrão de botão, para ele parecer o texto do cartão. */
+.task-toggle {
+  display: block;
+  width: 100%;
+  min-height: var(--touch-size);
+  margin: 0;
   padding: 12px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .task-title {
   overflow-wrap: anywhere;
+}
+
+/* A parte que abre: notas e Adiar, com espaço embaixo para o botão não encostar na borda. */
+.task-details {
+  padding-bottom: var(--space-3);
+}
+
+/* pre-wrap mostra as quebras de linha e os espaços das notas como foram escritos. */
+.task-notes {
+  margin: 0 0 var(--space-3);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.task-no-notes,
+.task-postpone-locked {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 14px;
+}
+
+.task-postpone-locked {
+  margin-top: var(--space-1);
 }
 
 .task-notes-icon {

@@ -231,6 +231,7 @@ Recusas:
 - **Ordem das listas:** dentro de um dia, as pendentes, as concluídas e as colunas da semana seguem a ordem de criação (`created_at`), com o id só como desempate em caso de empate exato. As atrasadas no topo da visão de hoje seguem a data marcada, da mais antiga para a mais recente; em empate, `created_at` e depois id.
 - **Notas no dia e na semana:** tarefas que têm notas mostram um ícone.
 - **Toque na tarefa:** tocar na tarefa expande o cartão, mostrando as notas (se houver) e os botões Editar e Adiar; tocar de novo recolhe. Numa tarefa sem notas, o toque expande do mesmo jeito, mostrando só os botões. O cartão expandido de uma tarefa concluída não mostra o botão Adiar, só as notas e o Editar. Numa tarefa travada (seção 4.2), o botão Adiar fica bloqueado. Concluir é pela caixinha de marcar, separada do toque.
+- **Adiar pede confirmação:** cada adiamento tira 25% do XP e não tem volta (antecipar não desconta o contador). O primeiro toque troca o texto do botão para "Confirmar adiar (−25% XP)", e só o segundo adia. Sem confirmação, o botão volta ao normal sozinho depois de alguns segundos, ou ao tocar em outra coisa. Sem caixa de diálogo do navegador (`confirm`, `alert`). O "−25% XP" é texto fixo, não uma conta.
 - **Criar/editar tarefa:** título, data, dificuldade, cor, tipo e notas. Excluir fica dentro da tela de edição e sempre pede confirmação antes de apagar. Numa tarefa travada, a data fica travada no formulário. Numa tarefa concluída, a dificuldade e a data ficam travadas no formulário.
 - **Ao subir de nível:** uma comemoração curta na tela.
 
@@ -534,7 +535,7 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 
 **Fora da tarefa 7:**
 
-- Botão na tela: o front-end manda em `shown_due_date` a data que recebeu da listagem e nunca calcula a data nova. O 409 recarrega a lista, como no Concluir.
+- Botão na tela: o front-end manda em `shown_due_date` a data que recebeu da listagem e nunca calcula a data nova. O 409 recarrega a lista, como no Concluir. Resolvido na etapa 10.3.
 - A edição tem uma brecha parecida, que continua aberta: um `PUT` que muda a data, sobreposto a um Concluir, grava a data numa tarefa concluída; sobreposto a um Adiar, perde um adiamento. É bem menos provável, porque o formulário fica em outra tela. Falta decidir se e quando tratar.
 
 **Decisões da tarefa 8 (plano `08-api-do-jogador.md`):**
@@ -613,7 +614,7 @@ Por que esta ordem: a API vem primeiro porque as três telas dependem dela, e as
 **Fora da etapa 10.1:**
 
 - A semana (`GET /tasks/week/{day}`) sem os campos novos: decidir na tarefa 12, junto com o toque no cartão da semana.
-- O 409 da última data possível no Adiar: decidir na etapa 10.3.
+- O 409 da última data possível no Adiar: decidir na etapa 10.3. Resolvido na etapa 10.3.
 
 **Decisões da etapa 10.2 (plano `10.2-lista-de-hoje.md`):**
 
@@ -636,6 +637,24 @@ Por que esta ordem: a API vem primeiro porque as três telas dependem dela, e as
 - Separar o `app.js` por tela, com vários `<script defer>` na ordem certa, sem módulos: decidir na tarefa 11, quando o formulário chegar.
 - O título "Hoje" passa a mostrar o dia escolhido na etapa 10.4.
 - O ✎ das notas é provisório: a tarefa 13 troca pelo ícone definitivo, local.
+
+**Decisões da etapa 10.3 (plano `10.3-cartao-com-adiar.md`):**
+
+- **O botão do título:** um `<button>` com `aria-expanded` envolve o título, o ✎, a data da atrasada e o "+N XP", com 48 px de altura no mínimo e a largura do cartão. A caixinha continua fora dele. Abrir e fechar só muda o cartão (`aria-expanded` e `hidden`), sem desenhar a lista de novo, então o foco fica no botão tocado.
+- **Um cartão aberto por vez:** abrir um fecha o outro. Uma variável só (`openTaskId`) guarda o estado, e com um aberto só um Adiar aparece por vez.
+- **Aberto ao recarregar:** a lista é desenhada de novo depois de toda gravação e na volta ao app, e o cartão aberto nasce aberto. A concluída continua aberta em "Concluídas". Se a tarefa sumiu da lista, nenhum cartão fica aberto, para ela não reaparecer aberta outro dia.
+- **O que o cartão aberto mostra:** notas, se houver, e o Adiar; na concluída, só as notas. A concluída sem notas mostra "Sem notas.", para não abrir vazia antes do Editar da tarefa 11. As notas entram por `textContent`, com `white-space: pre-wrap`, que mantém as quebras de linha.
+- **Confirmação do Adiar (regra da seção 6.2):** o texto vira "Confirmar adiar (−25% XP)" e volta sozinho em 5 segundos, ou ao tocar em qualquer outra coisa da página (um ouvinte de `click` no `document`), ao abrir ou fechar um cartão e ao desenhar a lista de novo.
+- **Toque duplo no Adiar (regra 11):** no Chrome do Android, com `width=device-width`, o toque duplo não dá zoom e vira dois cliques, o que passaria pela confirmação inteira sem querer. Por isso, no primeiro meio segundo da confirmação o toque é ignorado. O botão não muda de aparência nem perde o foco nesse tempo. Decidido no plano `10.3-cartao-com-adiar.md`.
+- **Adiar:** manda em `shown_due_date` a `due_date` da lista, com corpo em JSON e `fetch` no modo padrão. Depois, a lista e o topo recarregam juntos. Uma gravação por vez vale para a caixinha e o Adiar juntos; os botões do título continuam livres.
+- **Aviso:** "Adiada para 06/11/2026: Ler 30 páginas", no topo fixo, com a data da resposta do servidor, só formatada. O título vai junto porque o cartão sai da lista de hoje. Some em 10 segundos ou na próxima gravação.
+- **Tarefa travada:** o Adiar fica `disabled`, com "Data travada: esta tarefa chegou ao limite de adiamentos." embaixo. O texto não cita o número 3, para não ser um segundo lugar com a regra, e vale também para a trava por dias de atraso.
+- **Os 409:** a tela desatualizada recarrega sem mensagem. O da última data possível é reconhecido depois de recarregar, sem ler o texto da resposta: cada recusa da rota deixa um rastro diferente na lista nova (a concluída vai para "Concluídas", a travada volta com `due_date_locked`, a desatualizada some ou volta com outra data). Se a tarefa volta pendente, com a mesma `due_date` e sem trava, só sobra a última data, e o topo mostra "Esta tarefa já está na última data possível e não pode ser adiada." A comparação é de igualdade entre dois textos do servidor, sem conta de data. Um campo novo na API foi descartado: mexeria no back-end numa etapa de front, por um caso que, na tela de hoje, só acontece em 31/12/9999.
+
+**Fora da etapa 10.3:**
+
+- O "Sem notas." da concluída sai na tarefa 11, quando o Editar ocupar esse lugar.
+- O toque no cartão da semana fica para a tarefa 12.
 
 **Detalhe sobre testar no celular:** antes da publicação, o teste é pelo cabo USB, abrindo `http://localhost:8000` no celular, como explica a seção 6.7. Como `localhost` é origem segura, o service worker e a instalação já podem ser testados assim. A instalação definitiva vem na tarefa 17.
 
@@ -716,9 +735,9 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | `backend/app/routers/task_types.py` | API dos tipos de tarefa; também define `SessionDep` e `MAX_ID`, usados em `tasks.py`. | `POST /task-types`, `GET /task-types`, `PATCH /task-types/{task_type_id}`, `DELETE /task-types/{task_type_id}` | 6.1, 6.6 | `test_task_types.py` |
 | `backend/app/routers/tasks.py` | API das tarefas: criar, listar hoje, por dia e por semana, editar (inclusive a data), excluir, concluir, desmarcar e adiar. A lista do dia traz, em cada tarefa, a trava da data e o XP rendido. | `POST /tasks`, `GET /tasks/today`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `POST /tasks/{task_id}/complete`, `POST /tasks/{task_id}/uncomplete`, `POST /tasks/{task_id}/postpone`, `TaskView`, `DayTasks`, `build_day_tasks`, `task_view`, `xp_earned_by_task`, `ensure_date_is_not_past`, `ensure_due_date_can_change`, `change_due_date`, `change_completed` | 6.1, 6.2, 4.2, 4.3, 4.4 | `test_tasks.py` |
 | `backend/app/routers/player.py` | API do jogador: soma o histórico e devolve XP total, nível e barra. | `GET /player`, `Player` | 4.4, 4.5, 6.2 | `test_player.py` |
-| `frontend/index.html` | A página do app: o topo fixo com nível, XP, barra e o aviso de erro ao salvar; a lista de hoje (atrasadas, pendentes e "Concluídas"), com os estados de carregando, erro e dia vazio; e o modelo do cartão. | `#player-level`, `#player-xp`, `#player-progress`, `#player-message`, `#save-message`, `#day-status`, `#day-error`, `#day-retry`, `#day-view`, `#overdue-list`, `#pending-list`, `#completed-section`, `#completed-list`, `#task-card-template` | 6.2, 6.3, 6.7 | `test_frontend.py` (inclusive `test_html_has_no_inline_code`) |
-| `frontend/css/style.css` | O visual: variáveis de cores e espaçamentos, layout de celular, topo, barra, cartões, seções, "Concluídas", foco e elementos escondidos. | variáveis em `:root`, `[hidden]`, `.visually-hidden`, `.top-bar`, `.xp-bar`, `.task-card`, `.task-check`, `.task-section`, `.completed-section` | 6.3, 6.7 | `test_frontend.py` |
-| `frontend/js/app.js` | Chama a API e mostra o topo e a lista de hoje como o servidor mandou; conclui e desmarca pela caixinha e recarrega a tela, também quando o app volta do segundo plano. Sem conta de XP, de data ou de trava. | `API_BASE`, `apiRequest`, `formatDueDate`, `showPlayer`, `loadPlayer`, `createTaskCard`, `createOverdueCard`, `showDay`, `loadDay`, `toggleTask`, `focusTask`, `refreshScreen` | 6.2, 6.3, 6.5, 6.7 | `test_frontend.py` (só a proibição de `innerHTML` e parecidos); o resto, pelo roteiro manual |
+| `frontend/index.html` | A página do app: o topo fixo com nível, XP, barra, o aviso de erro ao salvar e o aviso do Adiar; a lista de hoje (atrasadas, pendentes e "Concluídas"), com os estados de carregando, erro e dia vazio; e o modelo do cartão, com o botão do título e a parte que abre (notas e Adiar). | `#player-level`, `#player-xp`, `#player-progress`, `#player-message`, `#save-message`, `#postpone-notice`, `#day-status`, `#day-error`, `#day-retry`, `#day-view`, `#overdue-list`, `#pending-list`, `#completed-section`, `#completed-list`, `#task-card-template` (`.task-toggle`, `.task-details`, `.task-notes`, `.task-postpone`) | 6.2, 6.3, 6.7 | `test_frontend.py` (inclusive `test_html_has_no_inline_code`) |
+| `frontend/css/style.css` | O visual: variáveis de cores e espaçamentos, layout de celular, topo, barra, cartões, botão do título, notas, Adiar bloqueado e pedindo confirmação, seções, "Concluídas", foco e elementos escondidos. | variáveis em `:root`, `[hidden]`, `.visually-hidden`, `.top-bar`, `.xp-bar`, `.button`, `.task-card`, `.task-check`, `.task-toggle`, `.task-details`, `.task-notes`, `.task-section`, `.completed-section` | 6.3, 6.7 | `test_frontend.py` |
+| `frontend/js/app.js` | Chama a API e mostra o topo e a lista de hoje como o servidor mandou; conclui e desmarca pela caixinha; abre e fecha o cartão; adia com confirmação e avisa a data nova; recarrega a tela depois de cada gravação e quando o app volta do segundo plano. Sem conta de XP, de data ou de trava. | `API_BASE`, `apiRequest`, `formatDueDate`, `showPlayer`, `loadPlayer`, `createTaskCard`, `createOverdueCard`, `showDay`, `loadDay`, `toggleTask`, `focusTask`, `toggleCard`, `setCardOpen`, `handlePostponeClick`, `startPostponeConfirmation`, `cancelPostponeConfirmation`, `postponeTask`, `reloadDidNotExplain`, `showPostponeNotice`, `refreshScreen` | 6.2, 6.3, 6.5, 6.7 | `test_frontend.py` (só a proibição de `innerHTML` e parecidos); o resto, pelo roteiro manual |
 | `backend/tests/conftest.py` | Reúne o que os testes de banco e de API têm em comum. O pytest carrega este arquivo sozinho. | `empty_engine`, `test_engine`, `client` | não se aplica | não se aplica |
 | `backend/tests/test_health.py` | Testa a rota `/health`. | `test_health_returns_ok` | 10 (tarefa 1) | não se aplica |
 | `backend/tests/test_database.py` | Testa a criação das tabelas ao iniciar, os valores padrão, as chaves estrangeiras e o AUTOINCREMENT só no SQLite. | `test_app_startup_creates_tables`, `test_task_with_unknown_task_type_is_refused`, `test_xp_entry_with_unknown_task_is_refused`, `test_autoincrement_exists_only_on_sqlite` | 6.1, 6.6 | não se aplica |
