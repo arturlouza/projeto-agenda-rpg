@@ -141,12 +141,44 @@ body {
 .task-checkbox:focus-visible,
 .task-toggle:focus-visible,
 .completed-section > summary:focus-visible,
-.button:focus-visible {
+.button:focus-visible,
+.day-picker:focus-visible {
   outline: 3px solid var(--color-focus);
   outline-offset: 2px;
 }
 
-/* Textos de estado da lista: "Carregando tarefas…" e "Nenhuma tarefa para hoje." */
+/* A barra de navegação: seta, campo de data, seta e "Hoje", numa linha. flex-wrap deixa o
+   "Hoje" descer de linha numa tela estreita, em vez de criar rolagem para o lado. */
+.day-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+/* As setas: quadradas, com 48 px, o mínimo de toque recomendado no Android. */
+.day-nav-arrow {
+  min-width: var(--touch-size);
+  padding: 0;
+  font-size: var(--font-size-large);
+}
+
+/* O campo de data ocupa o espaço que sobra na linha. min-width: 0 deixa ele encolher, em vez
+   de empurrar o "Hoje" para fora da tela. */
+.day-picker {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--touch-size);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+
+/* Textos de estado da lista: "Carregando tarefas…" e "Nenhuma tarefa para hoje." (ou "neste dia"). */
 .day-status {
   margin: var(--space-3) 0;
   color: var(--color-text-muted);

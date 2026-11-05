@@ -19,6 +19,11 @@ CONTENT_SECURITY_POLICY = (
     "form-action 'none'"
 )
 
+# Os arquivos de frontend/ podem ficar guardados no navegador, mas ele confere com o servidor
+# antes de usar (seção 6.5). Sem isso, o Chrome usou o CSS e o JavaScript velhos depois de uma
+# mudança, e o app pareceu quebrado até um Ctrl+Shift+R.
+FRONTEND_CACHE_CONTROL = "no-cache"
+
 
 # O que vem antes do yield roda ao ligar o app; o que viesse depois rodaria ao desligar.
 @asynccontextmanager
@@ -53,6 +58,16 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# O StaticFiles com o Cache-Control. file_response é o método do StaticFiles que monta a
+# resposta de um arquivo achado, inclusive o 304 ("a sua cópia ainda vale"). Os 404 e as
+# respostas da API não passam por aqui.
+class FrontendFiles(StaticFiles):
+    def file_response(self, full_path, stat_result, scope, status_code=200) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers["Cache-Control"] = FRONTEND_CACHE_CONTROL
+        return response
+
+
 # Entrega os arquivos de frontend/ só quando nenhuma rota da API casou com o pedido.
 # Com app.mount("/"), um GET numa rota só de POST daria 404 em vez de 405 (exceção no CLAUDE.md).
-app.router.default = StaticFiles(directory=FRONTEND_DIR, html=True)
+app.router.default = FrontendFiles(directory=FRONTEND_DIR, html=True)

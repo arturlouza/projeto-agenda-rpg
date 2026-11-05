@@ -78,6 +78,39 @@ def test_frontend_files_open_with_the_csp(client, path, content_type):
     assert response.headers["content-security-policy"] == EXPECTED_CSP
 
 
+# Seção 6.5: o navegador pode guardar os arquivos do front, mas confere com o servidor antes
+# de usar. Assim, um F5 comum já pega a versão nova depois de uma mudança.
+@pytest.mark.parametrize("path", ["/", "/index.html", "/css/style.css", "/js/app.js"])
+def test_frontend_files_are_checked_before_use(client, path):
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["content-security-policy"] == EXPECTED_CSP
+
+
+# O caminho do F5 com o arquivo igual: o navegador manda a ETag da cópia que tem, e o servidor
+# responde 304, sem corpo, dizendo que a cópia ainda vale.
+def test_unchanged_frontend_file_answers_304(client):
+    first = client.get("/js/app.js")
+
+    second = client.get("/js/app.js", headers={"If-None-Match": first.headers["etag"]})
+
+    assert second.status_code == 304
+    assert second.content == b""
+    assert second.headers["cache-control"] == "no-cache"
+
+
+# O no-cache é só dos arquivos do front: a API responde como antes. Na etapa 15.2, a API ganha
+# o próprio Cache-Control: no-store (seção 6.7), e este teste muda junto.
+@pytest.mark.parametrize("path", ["/health", "/player", "/tasks/today", "/openapi.json"])
+def test_api_does_not_get_the_frontend_cache_header(client, path):
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert "cache-control" not in response.headers
+
+
 @pytest.mark.parametrize("path", ["/agenda.db", "/.env"])
 def test_database_and_secrets_are_not_served(client, path):
     response = client.get(path)

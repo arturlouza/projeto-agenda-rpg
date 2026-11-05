@@ -39,6 +39,22 @@ function formatDueDate(text) {
   return dueDateFormat.format(new Date(text));
 }
 
+// O mesmo cuidado do timeZone "UTC", agora com o dia da semana por extenso.
+const dayTitleFormat = new Intl.DateTimeFormat("pt-BR", {
+  timeZone: "UTC",
+  weekday: "long",
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+});
+
+// "2026-11-06" vira "Sexta-feira, 06/11/2026". O Intl escreve o dia da semana em minúsculas, então
+// a primeira letra passa para maiúscula. É troca de letra, não conta de data.
+function formatDayTitle(text) {
+  const formatted = dayTitleFormat.format(new Date(text));
+  return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+}
+
 // ---------------------------------------------------------------------------------------------
 // 3. Topo: nível, XP e barra
 // ---------------------------------------------------------------------------------------------
@@ -88,12 +104,20 @@ const dayEmpty = document.getElementById("day-empty");
 const overdueSection = document.getElementById("overdue-section");
 const overdueList = document.getElementById("overdue-list");
 const pendingSection = document.getElementById("pending-section");
+const pendingTitle = document.getElementById("pending-title");
 const pendingList = document.getElementById("pending-list");
 const completedSection = document.getElementById("completed-section");
 const completedSummary = document.getElementById("completed-summary");
 const completedCount = document.getElementById("completed-count");
 const completedList = document.getElementById("completed-list");
 const taskCardTemplate = document.getElementById("task-card-template");
+const dayPrevious = document.getElementById("day-previous");
+const dayNext = document.getElementById("day-next");
+const dayToday = document.getElementById("day-today");
+const dayPicker = document.getElementById("day-picker");
+
+const EMPTY_TODAY_TEXT = "Nenhuma tarefa para hoje.";
+const EMPTY_DAY_TEXT = "Nenhuma tarefa neste dia.";
 
 // A última lista desenhada, como veio da API, ou null se a última busca deu erro. O Adiar usa
 // para saber se recarregar explicou um 409 (seção 8).
@@ -205,6 +229,20 @@ function showDay(day) {
   completedCount.textContent = numberFormat.format(day.completed.length);
   dayEmpty.hidden = !(day.overdue.length === 0 && day.pending.length === 0 && day.completed.length === 0);
 
+  // O dia escrito na tela vem do "day" da resposta, e o "é hoje?", do is_today: a tela não
+  // compara datas. As setas usam os vizinhos que vieram prontos; null bloqueia a seta. dayPath
+  // e TODAY_PATH ficam na seção 5.
+  pendingTitle.textContent = day.is_today ? "Hoje" : formatDayTitle(day.day);
+  dayEmpty.textContent = day.is_today ? EMPTY_TODAY_TEXT : EMPTY_DAY_TEXT;
+  dayPicker.value = day.day;
+  dayPrevious.disabled = day.previous_day === null;
+  dayNext.disabled = day.next_day === null;
+  // Chegou a hoje por uma seta ou pelo calendário: daqui em diante, recarrega como "Hoje", para
+  // a virada da meia-noite levar a tela ao dia novo.
+  if (day.is_today) {
+    dayPath = TODAY_PATH;
+  }
+
   dayStatus.hidden = true;
   dayError.hidden = true;
   dayView.hidden = false;
@@ -221,22 +259,33 @@ function showDayLoading() {
 }
 
 // Troca a lista pelo aviso de erro. Melhor do que deixar na tela uma lista que pode ser velha.
+// Sem dia na tela, as setas não têm de onde partir e ficam bloqueadas; "Hoje" e o calendário
+// continuam livres.
 function showDayError() {
   shownDay = null;
+  dayPrevious.disabled = true;
+  dayNext.disabled = true;
   dayStatus.hidden = true;
   dayView.hidden = true;
   dayError.hidden = false;
 }
 
+const TODAY_PATH = "tasks/today";
+
+// O caminho do dia da tela: "tasks/today" em hoje, ou "tasks/day/AAAA-MM-DD" em outro dia. As
+// recargas (depois de gravar, ao voltar ao app e no "Tentar de novo") pedem este caminho. É um
+// texto montado com o que veio da API ou do campo de data, sem conta de data.
+let dayPath = TODAY_PATH;
+
 // Número do pedido mais recente da lista. Se dois pedidos se cruzarem, só o último é desenhado.
 let latestDayRequest = 0;
 
-// Busca a lista de hoje. O servidor diz que dia é: a tela nunca lê o relógio do celular.
+// Busca o dia de dayPath. O servidor diz que dia é hoje: a tela nunca lê o relógio do celular.
 async function loadDay() {
   latestDayRequest = latestDayRequest + 1;
   const thisRequest = latestDayRequest;
   try {
-    const day = await apiRequest("tasks/today");
+    const day = await apiRequest(dayPath);
     if (thisRequest === latestDayRequest) {
       showDay(day);
     }
@@ -272,12 +321,33 @@ function showSaveMessage(text) {
   message.hidden = false;
 }
 
-// Esconde a linha de erro e o aviso do Adiar. Toda gravação nova começa por aqui.
+// Quanto tempo o aviso fica no topo.
+const NOTICE_MS = 10000;
+let noticeTimer = null;
+
+// O aviso de que a tarefa saiu da tela: adiada, concluída olhando outro dia ou desmarcada de
+// volta ao dia marcado. Uma linha só, para os três; o texto novo substitui o anterior.
+function showNotice(text) {
+  const notice = document.getElementById("notice");
+  notice.textContent = text;
+  notice.hidden = false;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(hideNotice, NOTICE_MS);
+}
+
+function hideNotice() {
+  clearTimeout(noticeTimer);
+  const notice = document.getElementById("notice");
+  notice.textContent = "";
+  notice.hidden = true;
+}
+
+// Esconde a linha de erro e o aviso. Toda gravação nova começa por aqui.
 function hideMessages() {
   const message = document.getElementById("save-message");
   message.textContent = "";
   message.hidden = true;
-  hidePostponeNotice();
+  hideNotice();
 }
 
 // Conclui ou desmarca a tarefa e depois recarrega a lista e o topo, com o que o servidor diz.
@@ -288,8 +358,9 @@ async function toggleTask(task) {
 
   // A ação vem do que o servidor mandou na lista, não do desenho da caixinha.
   const action = task.completed ? "uncomplete" : "complete";
+  let result = null;
   try {
-    await apiRequest("tasks/" + task.id + "/" + action, { method: "POST" });
+    result = await apiRequest("tasks/" + task.id + "/" + action, { method: "POST" });
   } catch (error) {
     // 409: a tela estava desatualizada. Recarregar resolve, então não há mensagem.
     if (error.status !== 409) {
@@ -300,7 +371,26 @@ async function toggleTask(task) {
 
   saving = false;
   await refreshScreen();
+  if (result !== null) {
+    showMovedNotice(result.task);
+  }
   focusTask(task.id);
+}
+
+// Depois de concluir ou desmarcar e de recarregar: se a tarefa não está mais na lista desenhada,
+// o aviso diz para onde ela foi. A tela não prevê se ela some: olha o resultado. A concluída vai
+// para as Concluídas do dia em que foi concluída, hoje (seção 6.2); a desmarcada volta ao dia
+// marcado, com a data da resposta do servidor, só formatada. Sem lista (erro), não avisa: o
+// aviso de erro já está na tela.
+function showMovedNotice(savedTask) {
+  if (shownDay === null || document.getElementById("task-card-" + savedTask.id) !== null) {
+    return;
+  }
+  if (savedTask.completed) {
+    showNotice("Foi para as Concluídas de hoje: " + savedTask.title);
+  } else {
+    showNotice("Desmarcada, voltou para " + formatDueDate(savedTask.due_date) + ": " + savedTask.title);
+  }
 }
 
 // Devolve o foco à caixinha da tarefa depois de desenhar a lista de novo. Se ela foi para as
@@ -351,6 +441,15 @@ function setCardOpen(taskId, open) {
   card.querySelector(".task-details").hidden = !open;
 }
 
+// Fecha o cartão aberto, se houver, e cancela a confirmação do Adiar. Usada ao mudar de dia.
+function closeOpenCard() {
+  cancelPostponeConfirmation();
+  if (openTaskId !== null) {
+    setCardOpen(openTaskId, false);
+    openTaskId = null;
+  }
+}
+
 // Devolve o foco ao botão do título depois de desenhar a lista de novo. Se a tarefa sumiu
 // (foi adiada), não faz nada, como o focusTask.
 function focusCardToggle(taskId) {
@@ -370,11 +469,10 @@ const POSTPONE_LABEL = "Adiar";
 const POSTPONE_CONFIRM_LABEL = "Confirmar adiar (−25% XP)";
 const LAST_DATE_TEXT = "Esta tarefa já está na última data possível e não pode ser adiada.";
 
-// Quanto tempo a confirmação espera antes de voltar ao normal; quanto tempo ela ignora o toque,
-// para um toque duplo no "Adiar" não confirmar sozinho; e quanto tempo o aviso fica no topo.
+// Quanto tempo a confirmação espera antes de voltar ao normal, e quanto tempo ela ignora o toque,
+// para um toque duplo no "Adiar" não confirmar sozinho.
 const POSTPONE_CONFIRM_TIMEOUT_MS = 5000;
 const DOUBLE_TAP_GUARD_MS = 500;
-const POSTPONE_NOTICE_MS = 10000;
 
 // O botão que está pedindo confirmação, ou null.
 let confirmButton = null;
@@ -383,7 +481,6 @@ let confirmReady = false;
 // Os números que o setTimeout devolve, para o clearTimeout desistir deles.
 let confirmTimer = null;
 let readyTimer = null;
-let noticeTimer = null;
 
 // Primeiro toque: pede confirmação. Segundo toque no mesmo botão, depois do meio segundo: adia.
 function handlePostponeClick(task, button) {
@@ -410,8 +507,9 @@ function startPostponeConfirmation(button) {
   confirmTimer = setTimeout(cancelPostponeConfirmation, POSTPONE_CONFIRM_TIMEOUT_MS);
 }
 
-// Volta o botão ao normal. Chamada pelo tempo, por um toque em outra coisa (seção 9), ao abrir
-// ou fechar um cartão e ao desenhar a lista de novo. Sem confirmação em andamento, não faz nada.
+// Volta o botão ao normal. Chamada pelo tempo, por um toque em outra coisa (seção 10), ao abrir
+// ou fechar um cartão, ao mudar de dia e ao desenhar a lista de novo. Sem confirmação em
+// andamento, não faz nada.
 function cancelPostponeConfirmation() {
   clearTimeout(readyTimer);
   clearTimeout(confirmTimer);
@@ -422,8 +520,8 @@ function cancelPostponeConfirmation() {
   }
 }
 
-// Adia a tarefa e depois recarrega a lista e o topo. A tarefa adiada sai da lista de hoje, e o
-// aviso no topo diz para onde ela foi.
+// Adia a tarefa e depois recarrega a lista e o topo. A tarefa adiada sai da lista do dia, e o
+// aviso no topo diz para onde ela foi, com a data nova da resposta do servidor, só formatada.
 async function postponeTask(task) {
   saving = true;
   disableTaskControls();
@@ -452,7 +550,7 @@ async function postponeTask(task) {
   await refreshScreen();
 
   if (postponed !== null) {
-    showPostponeNotice(postponed);
+    showNotice("Adiada para " + formatDueDate(postponed.due_date) + ": " + postponed.title);
   }
   // 409 que recarregar explicou (tela desatualizada, concluída, travada): sem mensagem.
   if (refused && reloadDidNotExplain(task)) {
@@ -476,27 +574,57 @@ function reloadDidNotExplain(task) {
   return false;
 }
 
-// A data nova vem da resposta do servidor, só formatada.
-function showPostponeNotice(postponed) {
-  const notice = document.getElementById("postpone-notice");
-  notice.textContent = "Adiada para " + formatDueDate(postponed.due_date) + ": " + postponed.title;
-  notice.hidden = false;
-  clearTimeout(noticeTimer);
-  noticeTimer = setTimeout(hidePostponeNotice, POSTPONE_NOTICE_MS);
-}
-
-function hidePostponeNotice() {
-  clearTimeout(noticeTimer);
-  const notice = document.getElementById("postpone-notice");
-  notice.textContent = "";
-  notice.hidden = true;
-}
-
 // ---------------------------------------------------------------------------------------------
-// 9. Início
+// 9. Navegar entre os dias
 // ---------------------------------------------------------------------------------------------
 
-// Pede a lista e o topo ao mesmo tempo. Cada um trata o próprio erro.
+// Leva a tela para outro dia. O cartão fecha já no toque, e não só quando o dia novo chegar. A
+// lista antiga fica na tela até a nova chegar, para a tela não piscar a cada toque.
+function goToDay(path) {
+  closeOpenCard();
+  dayPath = path;
+  loadDay();
+}
+
+// As setas apontam para os vizinhos do dia que está na tela, que vieram prontos da API. Enquanto
+// o dia novo não chega, a seta aponta para o mesmo vizinho: um toque duplo anda um dia só. Elas
+// só ficam livres com um dia na tela (showDay), então shownDay nunca é null aqui.
+dayPrevious.addEventListener("click", function () {
+  goToDay("tasks/day/" + shownDay.previous_day);
+});
+
+dayNext.addEventListener("click", function () {
+  goToDay("tasks/day/" + shownDay.next_day);
+});
+
+dayToday.addEventListener("click", function () {
+  goToDay(TODAY_PATH);
+});
+
+// O campo entrega "" (vazio ou data incompleta) ou uma data AAAA-MM-DD, o mesmo formato da API.
+// Fora do min e do max do HTML, o próprio navegador marca validity.valid como falso. Nos dois
+// casos, nada é pedido. Se não, a data vai para a API exatamente como o campo a entregou.
+dayPicker.addEventListener("change", function () {
+  if (dayPicker.value === "" || !dayPicker.validity.valid) {
+    return;
+  }
+  goToDay("tasks/day/" + dayPicker.value);
+});
+
+// Ao sair do campo vazio ou inválido, ele volta a mostrar o dia da tela. Não volta no change,
+// para não atrapalhar quem ainda está digitando a data.
+dayPicker.addEventListener("blur", function () {
+  if (shownDay !== null && (dayPicker.value === "" || !dayPicker.validity.valid)) {
+    dayPicker.value = shownDay.day;
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// 10. Início
+// ---------------------------------------------------------------------------------------------
+
+// Pede a lista e o topo ao mesmo tempo. Cada um trata o próprio erro. A lista é a do dia da
+// tela (dayPath): em hoje, /tasks/today; em outro dia, esse mesmo dia.
 async function refreshScreen() {
   await Promise.all([loadDay(), loadPlayer()]);
 }
@@ -506,8 +634,9 @@ document.getElementById("day-retry").addEventListener("click", function () {
   loadDay();
 });
 
-// Quando o app volta do segundo plano, pede a lista e o topo de novo. O servidor diz que dia é:
-// se a meia-noite passou enquanto o app estava escondido, a tela já mostra o dia novo.
+// Quando o app volta do segundo plano, pede a lista e o topo de novo. Em hoje, o servidor diz que
+// dia é: se a meia-noite passou enquanto o app estava escondido, a tela já mostra o dia novo. Em
+// outro dia, a tela continua nele.
 document.addEventListener("visibilitychange", function () {
   if (document.visibilityState === "visible") {
     refreshScreen();
