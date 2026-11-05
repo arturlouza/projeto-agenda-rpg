@@ -19,10 +19,58 @@
       <progress id="player-progress" class="xp-bar" max="100" value="0"
                 aria-label="Progresso até o próximo nível"></progress>
       <p id="player-message" class="player-message" role="status">Carregando…</p>
+      <!-- Aviso de erro ao concluir ou desmarcar. Fica no topo fixo para ser visto mesmo com a
+           lista rolada. O app.js escreve o texto quando precisa. -->
+      <p id="save-message" class="player-message is-error" role="status" hidden></p>
     </div>
   </header>
 
-  <!-- As tarefas do dia entram aqui na tarefa 10. -->
-  <main class="content"></main>
+  <!-- A lista de hoje, preenchida pelo app.js com o que veio do GET /tasks/today. -->
+  <main class="content">
+    <p id="day-status" class="day-status" role="status">Carregando tarefas…</p>
+
+    <div id="day-error" class="day-error" hidden>
+      <p class="day-error-text">Não foi possível carregar as tarefas.</p>
+      <button type="button" id="day-retry" class="button">Tentar de novo</button>
+    </div>
+
+    <div id="day-view" hidden>
+      <section id="overdue-section" class="task-section is-overdue" hidden>
+        <h2 class="section-title">Atrasadas</h2>
+        <ul id="overdue-list" class="task-list"></ul>
+      </section>
+
+      <section id="pending-section" class="task-section" hidden>
+        <h2 class="section-title">Hoje</h2>
+        <ul id="pending-list" class="task-list"></ul>
+      </section>
+
+      <p id="day-empty" class="day-status" hidden>Nenhuma tarefa para hoje.</p>
+
+      <!-- <details> abre e fecha com um toque no <summary>, sem JavaScript. Nasce fechado. -->
+      <details id="completed-section" class="task-section completed-section" hidden>
+        <summary id="completed-summary">Concluídas (<span id="completed-count"></span>)</summary>
+        <ul id="completed-list" class="task-list"></ul>
+      </details>
+    </div>
+  </main>
+
+  <!-- Modelo do cartão de uma tarefa. O navegador não mostra o que está num <template>: o app.js
+       copia este modelo para cada tarefa e preenche os textos. No <label>, a caixinha de
+       concluir; o texto escondido da vista dá a ela o nome da tarefa para o leitor de tela. -->
+  <template id="task-card-template">
+    <li class="task-card">
+      <label class="task-check">
+        <input type="checkbox" class="task-checkbox">
+        <span class="task-check-name visually-hidden"></span>
+      </label>
+      <div class="task-body">
+        <span class="task-title"></span>
+        <span class="task-notes-icon" hidden><span aria-hidden="true">✎</span><span class="visually-hidden">Tem notas.</span></span>
+        <span class="task-due-date" hidden></span>
+        <span class="task-xp" hidden></span>
+      </div>
+    </li>
+  </template>
 </body>
 </html>

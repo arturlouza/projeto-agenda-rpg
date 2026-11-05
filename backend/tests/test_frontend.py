@@ -1,4 +1,5 @@
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,36 @@ FORBIDDEN_IN_JAVASCRIPT = [
     r"document\.write",
     r"\beval\b",
 ]
+
+
+# Lê o HTML e anota o que a CSP bloquearia sem aviso: script dentro da página, atributos
+# on... (onclick, onerror) e estilo dentro da página. O HTMLParser entrega os nomes dos
+# atributos em minúsculas e pula os comentários.
+class InlineCodeFinder(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.problems = []
+        self.inside_script = False
+
+    def handle_starttag(self, tag, attrs):
+        names = [name for name, value in attrs]
+        for name in names:
+            if name.startswith("on") or name == "style":
+                self.problems.append(f"<{tag}> com o atributo {name}")
+        if tag == "style":
+            self.problems.append("<style> dentro da página")
+        if tag == "script":
+            self.inside_script = True
+            if "src" not in names:
+                self.problems.append("<script> sem src")
+
+    def handle_endtag(self, tag):
+        if tag == "script":
+            self.inside_script = False
+
+    def handle_data(self, data):
+        if self.inside_script and data.strip():
+            self.problems.append("código dentro de <script>")
 
 
 def test_main_page_opens_with_the_csp(client):
@@ -137,3 +168,16 @@ def test_javascript_never_writes_html_or_evaluates_text():
         text = javascript_file.read_text(encoding="utf-8")
         for pattern in FORBIDDEN_IN_JAVASCRIPT:
             assert re.search(pattern, text) is None, f"{javascript_file.name} usa {pattern}"
+
+
+# Seção 6.7: a CSP bloqueia código dentro da página em silêncio (o botão só não funciona), e o
+# pytest não perceberia. Este teste pega antes.
+def test_html_has_no_inline_code():
+    html_files = sorted(FRONTEND_DIR.rglob("*.html"))
+    assert html_files
+
+    for html_file in html_files:
+        finder = InlineCodeFinder()
+        finder.feed(html_file.read_text(encoding="utf-8"))
+        finder.close()
+        assert finder.problems == [], f"{html_file.name}: {finder.problems}"
