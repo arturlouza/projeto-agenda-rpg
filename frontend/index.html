@@ -5,11 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agenda RPG</title>
   <link rel="stylesheet" href="css/style.css">
-  <!-- defer: o script só roda depois de o HTML inteiro estar pronto. -->
+  <!-- defer: cada script só roda depois de o HTML inteiro estar pronto, e eles rodam na ordem
+       em que aparecem aqui. O código que roda ao carregar só enxerga o que veio dos arquivos de
+       cima, por isso o app.js, que faz os primeiros pedidos, fica por último. -->
+  <script src="js/api.js" defer></script>
+  <script src="js/top-bar.js" defer></script>
+  <script src="js/day.js" defer></script>
   <script src="js/app.js" defer></script>
 </head>
 <body>
-  <!-- Topo fixo: nível, XP e barra, preenchidos pelo app.js com o que veio do GET /player. -->
+  <!-- Topo fixo: nível, XP e barra, preenchidos pelo top-bar.js com o que veio do GET /player. -->
   <header class="top-bar">
     <div class="top-bar-content">
       <div class="top-bar-row">
@@ -20,7 +25,7 @@
                 aria-label="Progresso até o próximo nível"></progress>
       <p id="player-message" class="player-message" role="status">Carregando…</p>
       <!-- Aviso de erro ao concluir ou desmarcar. Fica no topo fixo para ser visto mesmo com a
-           lista rolada. O app.js escreve o texto quando precisa. -->
+           lista rolada. O top-bar.js escreve o texto quando precisa. -->
       <p id="save-message" class="player-message is-error" role="status" hidden></p>
       <!-- Aviso de que a tarefa saiu da tela: adiada (com a data nova que o servidor devolveu),
            concluída olhando outro dia ou desmarcada de volta ao dia marcado. Fica no topo
@@ -29,7 +34,7 @@
     </div>
   </header>
 
-  <!-- A lista do dia, preenchida pelo app.js com o que veio do GET /tasks/today ou do
+  <!-- A lista do dia, preenchida pelo day.js com o que veio do GET /tasks/today ou do
        GET /tasks/day/{day}. -->
   <main class="content">
     <!-- Setas, campo de data e "Hoje". Ficam fora do #day-view para continuarem na tela
@@ -61,12 +66,12 @@
       </section>
 
       <section id="pending-section" class="task-section" hidden>
-        <!-- "Hoje", ou o dia escolhido por extenso, escrito pelo app.js. -->
+        <!-- "Hoje", ou o dia escolhido por extenso, escrito pelo day.js. -->
         <h2 id="pending-title" class="section-title">Hoje</h2>
         <ul id="pending-list" class="task-list"></ul>
       </section>
 
-      <!-- O texto muda pelo app.js: "para hoje" em hoje, "neste dia" nos outros. -->
+      <!-- O texto muda pelo day.js: "para hoje" em hoje, "neste dia" nos outros. -->
       <p id="day-empty" class="day-status" hidden>Nenhuma tarefa para hoje.</p>
 
       <!-- <details> abre e fecha com um toque no <summary>, sem JavaScript. Nasce fechado. -->
@@ -77,7 +82,7 @@
     </div>
   </main>
 
-  <!-- Modelo do cartão de uma tarefa. O navegador não mostra o que está num <template>: o app.js
+  <!-- Modelo do cartão de uma tarefa. O navegador não mostra o que está num <template>: o day.js
        copia este modelo para cada tarefa e preenche os textos. No <label>, a caixinha de
        concluir; o texto escondido da vista dá a ela o nome da tarefa para o leitor de tela.
        O botão do título abre e fecha a parte de baixo (.task-details), com as notas e o Adiar. -->

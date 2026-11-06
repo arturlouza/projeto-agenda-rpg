@@ -79,7 +79,13 @@ O detalhe de cada arquivo está no Mapa do código (seção 12 da especificaçã
 └── frontend/
     ├── index.html
     ├── css/style.css
-    ├── js/app.js
+    ├── js/
+    │   ├── api.js
+    │   ├── top-bar.js
+    │   ├── day.js
+    │   ├── task-form.js
+    │   ├── task-types.js
+    │   └── app.js
     ├── manifest.json
     └── service-worker.js
 ```
