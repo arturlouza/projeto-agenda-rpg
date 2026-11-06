@@ -28,6 +28,9 @@ TASK_COLOR_PATTERN = r"^#[0-9A-Fa-f]{6}$"
 # Dificuldades aceitas. Precisam ser as mesmas chaves de TASK_BASE_XP, em rules/xp.py.
 Difficulty = Literal["easy", "medium", "hard"]
 
+# Resposta do Adiar e da edição quando a tarefa não está mais como a tela a mostrava.
+STALE_TASK_MESSAGE = "A tarefa mudou desde que a tela foi aberta. Atualize a lista."
+
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 # Id que vem na rota. Fora deste intervalo, o FastAPI responde 422 sem consultar o banco.
@@ -45,13 +48,12 @@ TaskNotes = Annotated[
 TaskColor = Annotated[str, StringConstraints(pattern=TASK_COLOR_PATTERN, to_upper=True)]
 
 
-# O que a API recebe ao editar uma tarefa. É separada de Task porque modelos com table=True
-# não validam os dados. Nenhum campo tem valor padrão, então todos são obrigatórios: esquecer
-# um campo dá 422, em vez de apagar as notas ou voltar a cor ao padrão. Notas e tipo aceitam
-# null, que é o jeito de remover o valor de propósito. A data não é conferida aqui porque a
-# regra vale só para data nova, e a edição não pode recusar uma tarefa atrasada por causa da
-# data que não mudou.
-class TaskUpdate(SQLModel):
+# Os campos que a tela manda ao criar e ao editar, com as regras de cada um. É separada de Task
+# porque modelos com table=True não validam os dados. Aqui nenhum campo tem valor padrão. Notas e
+# tipo aceitam null, que é o jeito de remover o valor de propósito. A data não é conferida aqui
+# porque a regra vale só para data nova, e a edição não pode recusar uma tarefa atrasada por
+# causa da data que não mudou.
+class TaskFields(SQLModel):
     # Campo desconhecido é recusado, então o pedido não escolhe postponements nem completed.
     model_config = ConfigDict(extra="forbid")
 
@@ -69,11 +71,18 @@ class TaskUpdate(SQLModel):
         return notes or None
 
 
-# O que a API recebe ao criar uma tarefa: as mesmas regras da edição, mais os valores padrão.
-class TaskInput(TaskUpdate):
+# O que a API recebe ao criar uma tarefa: os mesmos campos, mais os valores padrão.
+class TaskInput(TaskFields):
     notes: TaskNotes | None = None
     color: TaskColor = DEFAULT_TASK_COLOR
     task_type_id: int | None = None
+
+
+# O que a API recebe ao editar uma tarefa. Todos os campos são obrigatórios: esquecer um dá 422,
+# em vez de apagar as notas ou voltar a cor ao padrão. shown_due_date é a data que o formulário
+# mostrava, como no Adiar: se a tarefa não tiver mais essa data, a tela estava desatualizada.
+class TaskUpdate(TaskFields):
+    shown_due_date: date
 
 
 # O que a API recebe ao adiar: a data que a tela mostrava. A data nova é o servidor quem
@@ -102,6 +111,10 @@ class DayTasks(SQLModel):
     is_today: bool
     previous_day: date | None
     next_day: date | None
+    # A data que o formulário sugere para uma tarefa nova: o dia listado ou, se ele já passou,
+    # hoje, porque a data nova não pode ser anterior a hoje (seção 6.1). Vem pronta do servidor
+    # para a tela não comparar datas (regra 9 do CLAUDE.md).
+    new_task_due_date: date
     overdue: list[TaskView]
     pending: list[TaskView]
     completed: list[TaskView]
@@ -156,20 +169,6 @@ def ensure_due_date_can_change(task: Task, days_late: int) -> None:
         raise HTTPException(
             status.HTTP_409_CONFLICT, detail="A data desta tarefa está travada e não pode mudar."
         )
-
-
-# Muda a data de uma tarefa na edição. Quem chama já conferiu que a data é outra e que não é
-# anterior a hoje. A trava vem antes do contador, porque postponements_after_date_change não a
-# confere. Os dias de atraso podem sair negativos aqui, com a data no futuro: as regras de xp.py
-# tratam esse valor como 0.
-def change_due_date(task: Task, new_due_date: date) -> None:
-    days_late = (app_today() - task.due_date).days
-    ensure_due_date_can_change(task, days_late)
-
-    task.postponements = postponements_after_date_change(
-        task.postponements, days_late, task.due_date, new_due_date
-    )
-    task.due_date = new_due_date
 
 
 # Muda o estado numa instrução só, que vale apenas se a tarefa ainda estiver no estado oposto.
@@ -263,6 +262,7 @@ def build_day_tasks(session: Session, day: date, today: date) -> DayTasks:
         is_today=day == today,
         previous_day=previous_day,
         next_day=next_day,
+        new_task_due_date=max(day, today),
         overdue=[task_view(task, today, earned) for task in overdue],
         pending=[task_view(task, today, earned) for task in pending],
         completed=[task_view(task, today, earned) for task in completed],
@@ -320,8 +320,11 @@ def list_tasks_by_week(day: date, session: SessionDep) -> list[WeekDay]:
 
 
 # O dado é conferido antes do estado da tarefa, então os 422 da data e do tipo vêm antes dos
-# 409. A tarefa só é alterada depois de todas as conferências, e por isso o pedido recusado
-# não grava nada.
+# 409. Os 409 vão do mais definitivo para o mais passageiro, como no Adiar: recarregar só
+# resolve a tela desatualizada, então os outros dizem o motivo real. A tarefa lida não é
+# alterada: os valores novos ficam em variáveis e vão ao banco numa instrução só, com condição.
+# Se o objeto lido mudasse, o SQLModel mandaria essa mudança sozinho ao banco antes do UPDATE
+# (autoflush), sem condição. O pedido recusado não grava nada.
 @router.put(
     "/{task_id}",
     responses={
@@ -329,7 +332,7 @@ def list_tasks_by_week(day: date, session: SessionDep) -> list[WeekDay]:
         409: {
             "description": (
                 "A tarefa concluída não pode mudar de dificuldade nem de data, "
-                "e a tarefa travada não pode mudar de data."
+                "a tarefa travada não pode mudar de data, ou a tela estava desatualizada."
             )
         },
     },
@@ -337,8 +340,10 @@ def list_tasks_by_week(day: date, session: SessionDep) -> list[WeekDay]:
 def update_task(task_id: TaskId, task_update: TaskUpdate, session: SessionDep) -> Task:
     task = get_task_or_404(session, task_id)
 
-    # Mandar a data que a tarefa já tem não é mudança, então nenhuma regra de data se aplica.
-    date_changed = task_update.due_date != task.due_date
+    # A mudança de data é a que a pessoa fez no formulário: a data mandada contra a que ele
+    # mostrava. Mandar a mesma data não é mudança (seção 6.1), então nenhuma regra de data se
+    # aplica. Se a tarefa já tiver outra data no banco, o UPDATE abaixo recusa.
+    date_changed = task_update.due_date != task_update.shown_due_date
 
     if date_changed:
         ensure_date_is_not_past(task_update.due_date)
@@ -351,15 +356,42 @@ def update_task(task_id: TaskId, task_update: TaskUpdate, session: SessionDep) -
             status.HTTP_409_CONFLICT, detail="Desmarque a tarefa antes de mudar a dificuldade."
         )
 
+    # A trava vem antes do contador, porque postponements_after_date_change não a confere. Os
+    # dias de atraso podem sair negativos, com a data no futuro: as regras de xp.py tratam esse
+    # valor como 0.
+    new_postponements = task.postponements
     if date_changed:
-        change_due_date(task, task_update.due_date)
+        days_late = (app_today() - task.due_date).days
+        ensure_due_date_can_change(task, days_late)
+        new_postponements = postponements_after_date_change(
+            task.postponements, days_late, task.due_date, task_update.due_date
+        )
 
-    task.title = task_update.title
-    task.notes = task_update.notes
-    task.difficulty = task_update.difficulty
-    task.color = task_update.color
-    task.task_type_id = task_update.task_type_id
-    session.add(task)
+    # Grava numa instrução só, que vale apenas se a tarefa ainda tiver a data que o formulário
+    # mostrava e ainda estiver concluída ou pendente como foi lida aqui. Assim, um Adiar ou um
+    # Concluir no meio da edição não se perde nem recebe uma data ou dificuldade que não devia.
+    # postponements fica fora da condição porque só muda junto com a data.
+    changed_rows = session.exec(
+        update(Task)
+        .where(
+            Task.id == task_id,
+            Task.completed == task.completed,
+            Task.due_date == task_update.shown_due_date,
+        )
+        .values(
+            title=task_update.title,
+            notes=task_update.notes,
+            difficulty=task_update.difficulty,
+            color=task_update.color,
+            task_type_id=task_update.task_type_id,
+            due_date=task_update.due_date,
+            postponements=new_postponements,
+        )
+    ).rowcount
+
+    if changed_rows == 0:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=STALE_TASK_MESSAGE)
+
     session.commit()
     session.refresh(task)
     return task
@@ -432,7 +464,7 @@ def uncomplete_task(task_id: TaskId, session: SessionDep) -> TaskXpChange:
 
 # A tarefa só muda se ainda estiver pendente e com a data que a tela mostrava, numa instrução
 # só, como em change_completed. Assim, dois pedidos ao mesmo tempo, ou um Adiar junto com um
-# Concluir, não passam os dois. Não usa change_due_date, que grava sem condição. A data nova é
+# Concluir, não passam os dois, como na edição. A data nova é
 # sempre depois de hoje, então ensure_date_is_not_past nunca recusaria. Adiar não mexe no XP,
 # então nada entra no histórico.
 @router.post(
@@ -476,10 +508,7 @@ def postpone_task(task_id: TaskId, postpone_input: TaskPostpone, session: Sessio
     ).rowcount
 
     if changed_rows == 0:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail="A tarefa mudou desde que a tela foi aberta. Atualize a lista.",
-        )
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=STALE_TASK_MESSAGE)
 
     session.commit()
     session.refresh(task)

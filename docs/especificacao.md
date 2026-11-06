@@ -220,7 +220,7 @@ Mudanças:
 Recusas:
 
 - **422:** dado inválido, ou seja, os casos da lista de campos, a data nova anterior a hoje e campo desconhecido no pedido.
-- **409:** dado válido, mas o estado da tarefa impede: mudar a data de uma tarefa travada (seção 4.2), mudar a dificuldade ou a data de uma tarefa concluída, concluir uma tarefa já concluída, desmarcar uma tarefa pendente, adiar uma tarefa que já está na última data possível (`9999-12-31`) ou adiar com a tela desatualizada.
+- **409:** dado válido, mas o estado da tarefa impede: mudar a data de uma tarefa travada (seção 4.2), mudar a dificuldade ou a data de uma tarefa concluída, concluir uma tarefa já concluída, desmarcar uma tarefa pendente, adiar uma tarefa que já está na última data possível (`9999-12-31`), ou adiar ou editar com a tela desatualizada.
 - O pedido recusado não grava nada.
 
 ### 6.2 Telas
@@ -493,7 +493,7 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 - **Arquivos:** `app/routers/tasks.py`, `tests/test_tasks.py`, `docs/especificacao.md` (registro das decisões).
 - **Como testar:** `pytest tests/test_tasks.py`. No `/docs`, editar uma tarefa e listar para conferir.
 - **Pronto quando:** cada campo é editado e validado; o pedido recusado não grava nada; tarefa concluída aceita título, notas, cor e tipo; 404 e 422 de id funcionam.
-- **Decisão:** a edição exige todos os campos, porque o formulário envia todos. Assim, esquecer um campo não apaga as notas nem volta a cor ao padrão. Notas e tipo aceitam `null`, que remove o valor de propósito.
+- **Decisão:** a edição exige todos os campos, porque o formulário envia todos. Assim, esquecer um campo não apaga as notas nem volta a cor ao padrão. Notas e tipo aceitam `null`, que remove o valor de propósito. Desde a etapa 11.1, a edição também exige `shown_due_date` (ver as decisões da etapa 11.1).
 - **Decisão:** a edição usa `PUT`, porque o pedido manda o registro inteiro. O `PUT` substitui só o que o cliente pode definir: `id`, `completed`, `completed_at`, `postponements` e `created_at` ficam fora do pedido e não mudam.
 - **Decisão:** nesta etapa, `due_date` no pedido dá 422, como todo campo desconhecido. Quando 422 e 409 se aplicam ao mesmo pedido, vale o 422, porque o dado é conferido antes do estado da tarefa.
 
@@ -504,7 +504,7 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 - **Como testar:** `pytest`. No `/docs`, criar uma tarefa, mudar a data para depois três vezes (`postponements` chega a 3), ver a quarta tentativa dar 409 e ver que editar só o título, mandando a mesma data, ainda funciona.
 - **Pronto quando:** este é o critério da tarefa 5 na tabela, "funciona pelo `/docs` e os testes cobrem as regras". Casos testados: data anterior a hoje dá 422; atrasada com 0 adiamentos e 2 dias de atraso fica com contador 3; antecipar não conta; travada por atraso ou por adiamento manual recusa inclusive antecipar: 409 quando a data nova é hoje ou depois, 422 quando é anterior a hoje, porque o dado é conferido antes do estado; concluída recusa mudar a data (409); travada ou atrasada aceita editar o título; o pedido recusado não grava nada.
 - **Decisão (tomada na etapa 5.8):** quando 422 e 409 se aplicam ao mesmo pedido, vale o 422, porque o dado é conferido antes do estado da tarefa. Por isso, antecipar uma tarefa travada por atraso dá sempre 422: a data dela já é anterior a hoje, então qualquer data mais antiga também é.
-- **Decisão:** `ensure_date_is_not_past` e `change_due_date` ficam em `tasks.py`, e a edição chama as duas, nesta ordem. A tarefa 7 mudou o que estava previsto aqui e não chama nenhuma delas (ver as decisões da tarefa 7). São duas funções porque a conferência do tipo fica entre elas. Elas não vão para `rules/xp.py` porque leem o relógio, alteram a `Task` e respondem com códigos HTTP; as contas continuam em `xp.py`.
+- **Decisão:** `ensure_date_is_not_past` e `change_due_date` ficam em `tasks.py`, e a edição chama as duas, nesta ordem. A tarefa 7 mudou o que estava previsto aqui e não chama nenhuma delas (ver as decisões da tarefa 7). São duas funções porque a conferência do tipo fica entre elas. Elas não vão para `rules/xp.py` porque leem o relógio, alteram a `Task` e respondem com códigos HTTP; as contas continuam em `xp.py`. A etapa 11.1 tirou `change_due_date`: ela mudava a `Task` lida, e a edição passou a gravar num `UPDATE` condicional, como o Adiar.
 
 **Fora da tarefa 5:**
 
@@ -537,7 +537,7 @@ Até a tarefa 6, a API não conclui tarefa e também recusa data passada. Por is
 **Fora da tarefa 7:**
 
 - Botão na tela: o front-end manda em `shown_due_date` a data que recebeu da listagem e nunca calcula a data nova. O 409 recarrega a lista, como no Concluir. Resolvido na etapa 10.3.
-- A edição tem uma brecha parecida, que continua aberta: um `PUT` que muda a data, sobreposto a um Concluir, grava a data numa tarefa concluída; sobreposto a um Adiar, perde um adiamento. É bem menos provável, porque o formulário fica em outra tela. Falta decidir se e quando tratar.
+- A edição tem uma brecha parecida, que continua aberta: um `PUT` que muda a data, sobreposto a um Concluir, grava a data numa tarefa concluída; sobreposto a um Adiar, perde um adiamento. É bem menos provável, porque o formulário fica em outra tela. Resolvido na etapa 11.1.
 
 **Decisões da tarefa 8 (plano `08-api-do-jogador.md`):**
 
@@ -635,7 +635,7 @@ Por que esta ordem: a API vem primeiro porque as três telas dependem dela, e as
 
 **Fora da etapa 10.2:**
 
-- Separar o `app.js` por tela, com vários `<script defer>` na ordem certa, sem módulos: decidir na tarefa 11, quando o formulário chegar.
+- Separar o `app.js` por tela, com vários `<script defer>` na ordem certa, sem módulos: decidir na tarefa 11, quando o formulário chegar. Decidido na divisão da tarefa 11: entra na etapa 11.2.
 - O título "Hoje" passa a mostrar o dia escolhido na etapa 10.4. Resolvido na etapa 10.4.
 - O ✎ das notas é provisório: a tarefa 13 troca pelo ícone definitivo, local.
 
@@ -654,7 +654,7 @@ Por que esta ordem: a API vem primeiro porque as três telas dependem dela, e as
 
 **Fora da etapa 10.3:**
 
-- O "Sem notas." da concluída sai na tarefa 11, quando o Editar ocupar esse lugar.
+- O "Sem notas." da concluída sai na tarefa 11, quando o Editar ocupar esse lugar. Decidido na divisão da tarefa 11: sai na etapa 11.4.
 - O toque no cartão da semana fica para a tarefa 12.
 
 **Decisões da etapa 10.4 (plano `10.4-navegar-entre-os-dias.md`):**
@@ -674,6 +674,47 @@ Por que esta ordem: a API vem primeiro porque as três telas dependem dela, e as
 - **Tarefa 14:** o service worker entrega os arquivos do cache dele, sem passar pelo `Cache-Control`, e quem renova o app instalado é o número de versão do cache (seção 6.5). O `no-cache` continua: quando o service worker novo se instala e baixa os arquivos, o download passa pelo cache comum do navegador, e sem o `no-cache` uma cópia velha poderia entrar no cache da versão nova.
 - Ao chegar a `0001-01-01` ou `9999-12-31` pela seta, ela fica bloqueada e o navegador tira o foco dela.
 - O `Intl` escreve o ano 1 como "01/01/1", sem os zeros. Só aparência, numa ponta que ninguém usa.
+
+**Divisão da tarefa 11:**
+
+A tarefa 11 mexe na API, cria o formulário e precisa de uma forma de cuidar dos tipos sem o `/docs`, então vira 7 etapas, feitas nesta ordem. Cada etapa tem plano próprio, em sessão nova, e só começa depois do commit da anterior. A divisão e as decisões abaixo estão no plano `11.1-api-do-formulario.md`.
+
+| Etapa | Entrega | Arquivos |
+| --- | --- | --- |
+| 11.1 API do formulário | A resposta do dia ganha `new_task_due_date`. O `PUT` exige `shown_due_date` e grava num `UPDATE` condicional. Só back-end | `backend/app/routers/tasks.py`, `backend/tests/test_tasks.py` |
+| 11.2 Separar o `app.js` | Arquivos por assunto, com vários `<script defer>` na ordem certa, sem módulos. Só move código, sem mudar comportamento. Um teste confere que todo `<script>` do `index.html` tem `defer` e existe | `frontend/js/*.js`, `frontend/index.html`, `backend/tests/test_frontend.py`, `CLAUDE.md` |
+| 11.3 Criar tarefa (fecha o critério) | Botão "Nova tarefa"; formulário num `<dialog>` com título, data, dificuldade, cor, tipo e notas; tipos de `GET /task-types`; data de `new_task_due_date`; cor omitida até ser escolhida; erros 422 em português; aviso quando a tarefa nasce fora do dia da tela | `index.html`, `style.css`, `js/api.js`, `js/task-form.js`, `test_frontend.py` |
+| 11.4 Editar tarefa | Botão Editar no cartão aberto, no lugar do "Sem notas."; formulário preenchido; data travada com `due_date_locked`; dificuldade e data travadas na concluída; `PUT` com todos os campos e `shown_due_date`; 409 recarrega a lista; aviso quando a tarefa sai da tela | os mesmos da 11.3 e `js/day.js` |
+| 11.5 Excluir | "Excluir" dentro do formulário de edição, com confirmação em dois toques, como o Adiar; o `apiRequest` aceita a resposta 204, sem corpo; aviso "Excluída: …" | os mesmos da 11.4 |
+| 11.6 Criar tipo no formulário | "Novo tipo" ao lado da escolha do tipo, por `POST /task-types`; o tipo novo já fica escolhido; o 409 de nome repetido aparece em português | os mesmos da 11.3 |
+| 11.7 Tela de tipos | Uma tela pequena, também num `<dialog>`, que lista, renomeia (`PATCH`) e exclui (`DELETE`, com confirmação em dois toques e o aviso de que as tarefas ficam sem tipo) | `index.html`, `style.css`, `js/task-types.js` |
+
+Por que esta ordem: a API vem primeiro, como na tarefa 10, para o formulário nascer sem conta de data e com a proteção pronta. A separação vem antes do formulário, para o diff da 11.2 só mover linhas e o formulário já nascer no arquivo dele. Criar vem antes de editar porque fecha o critério, e a edição reaproveita o formulário. Excluir fica dentro da tela de edição (seção 6.2). Os tipos ficam por último porque o formulário já funciona com os tipos que existem, e a 11.7 fecha a falta do `/docs` em produção antes da tarefa 17.
+
+**Decisões da divisão da tarefa 11:**
+
+- **Separar o `app.js` (etapa 11.2):** `js/api.js` (API e formatação), `js/top-bar.js` (topo e as mensagens do topo: `showSaveMessage`, `showNotice`, `hideNotice`, `hideMessages`), `js/day.js` (desenhar e buscar o dia, caixinha, cartão, Adiar e navegação), `js/task-form.js` (11.3), `js/task-types.js` (11.7) e `js/app.js` (início), nesta ordem, todos com `defer`. Sem módulos, os scripts comuns dividem o mesmo espaço de nomes; o código que roda ao carregar só enxerga o que veio dos arquivos anteriores, e um nome repetido em dois arquivos impede o segundo de rodar.
+- **Os dois formatos do 422 (etapa 11.3):** o `apiRequest` guarda o `detail` da resposta no erro. Texto (as rotas, já em português) aparece como veio. Lista (a validação automática, em inglês) vira uma frase com o nome do campo e o tipo do erro: "Título: não pode ficar vazio." (`string_too_short`), "Notas: no máximo 1.000 caracteres." (`string_too_long`, com o número de `ctx.max_length`, que vem do servidor) e "está inválida" para os outros. O campo fica com `aria-invalid` e recebe o foco. Sem `detail` legível, "Não foi possível salvar. Tente de novo.". O HTML não leva `required` nem `maxlength`, para os números ficarem só em `tasks.py`. Traduzir no servidor mudaria o formato do 422 de todas as rotas.
+- **Cor padrão (etapa 11.3):** ao criar, o pedido omite `color` enquanto a cor não for escolhida, e o servidor aplica `DEFAULT_TASK_COLOR`; `null` dá 422. O `<input type="color">` abre mostrando a cor padrão escrita no HTML, e um teste compara esse valor com `DEFAULT_TASK_COLOR`. Ao editar, o `PUT` manda sempre a cor do campo. Um botão "Cor padrão" volta à cor padrão. O `style.backgroundColor` entra quando a cor pintar o cartão (tarefa 13).
+- **"Sem notas." (etapa 11.4):** sai do HTML, do CSS e do JavaScript. A concluída aberta mostra as notas, se houver, e o Editar.
+- **Tipos (etapas 11.3, 11.6 e 11.7, decisão minha):** o formulário escolhe num `<select>` entre "Sem tipo" e os tipos de `GET /task-types`, na ordem da API, com o nome por `textContent`. Criar tipo entra no formulário (11.6), e renomear e excluir, numa tela própria (11.7). Sem isso, depois da publicação não haveria como criar um tipo, porque o `/docs` fica desligado em produção.
+- **Formulário (etapa 11.3):** um `<dialog>` aberto com `showModal()`, que prende o foco, deixa a lista de fundo sem toque, fecha com Esc e, no Chrome recente do Android, com o gesto de voltar. Conferir por USB. Dentro dele, um `<form>` com `novalidate`, sem `method` e sem `action`, só para o Enter salvar: o `submit` chama `preventDefault()` e grava por `fetch` no modo padrão (seção 6.7).
+- **Valem para as etapas 11.3 a 11.7:** as regras da tela da tarefa 10 (48 px, 360 px sem rolagem para o lado, foco visível, nada que dependa de passar o mouse), `<template>` com `cloneNode`, uma gravação por vez, só o pedido mais recente desenhado, aviso quando a tarefa sai da tela e a data de hoje sempre vinda do servidor.
+
+**Fora da divisão da tarefa 11:**
+
+- O `DELETE` responde 204 sem corpo, e o `apiRequest` de hoje sempre lê o corpo como JSON. A etapa 11.5 corrige.
+- Como a cor é livre, um fundo escuro deixaria o título ilegível quando a tarefa 13 pintar o cartão. Decidir na tarefa 13.
+
+**Decisões da etapa 11.1 (plano `11.1-api-do-formulario.md`):**
+
+- **Data sugerida (decisão minha):** `DayTasks` ganha `new_task_due_date`, o dia listado ou, se ele já passou, hoje, calculado em `build_day_tasks` com o mesmo "hoje" do resto da resposta (`max(day, today)`). Assim o formulário não compara datas, e a sugestão nunca é recusada como data anterior a hoje. Vem na resposta do dia, e não numa rota nova, porque o formulário abre a partir do dia que já está na tela.
+- **`shown_due_date` na edição (decisão minha):** o `PUT` exige a data que o formulário mostrava, como o Adiar. A criação recusa o campo, como todo campo desconhecido: os campos comuns ficam em `TaskFields`, e `TaskInput` e `TaskUpdate` herdam dela.
+- **Mudança de data:** é a que a pessoa fez no formulário, `due_date` diferente de `shown_due_date`. Mandar a data que o formulário mostrava não é mudança, então uma atrasada adiada em outro aparelho, editada com o formulário velho, recebe o 409 da tela desatualizada, e não o 422 da data anterior a hoje.
+- **`UPDATE` condicional:** a edição grava numa instrução só, que vale apenas se a tarefa ainda tiver a data que o formulário mostrava (fecha a tela desatualizada e a corrida com o Adiar, que perderia um adiamento) e ainda estiver concluída ou pendente como foi lida no pedido (fecha a corrida com Concluir e Desmarcar, que deixaria data ou dificuldade nova numa tarefa concluída). `postponements` fica fora da condição porque só muda junto com a data. Se nada muda, 409 com `STALE_TASK_MESSAGE`, o mesmo texto do Adiar. Mesmo só o título é recusado se a tarefa foi concluída no meio da edição. Foi testado só no SQLite, como os outros `UPDATE` condicionais: conferir no PostgreSQL na tarefa 16.
+- **Nada muda na `Task` lida antes do `UPDATE`:** os valores novos ficam em variáveis. Se o objeto lido mudasse, o SQLModel mandaria a mudança sozinho ao banco antes do `UPDATE` (autoflush), sem condição. Por isso `change_due_date` saiu.
+- **Ordem das recusas:** 422 (corpo, data anterior a hoje, tipo), depois 404, depois os 409 do mais definitivo para o mais passageiro: dificuldade da concluída, data da concluída, data travada e tela desatualizada.
+- **Tarefa excluída no meio da edição:** o `UPDATE` encontra 0 linhas e responde 409. A tela recarrega e a tarefa já não está lá.
 
 **Detalhe sobre testar no celular:** antes da publicação, o teste é pelo cabo USB, abrindo `http://localhost:8000` no celular, como explica a seção 6.7. Como `localhost` é origem segura, o service worker e a instalação já podem ser testados assim. A instalação definitiva vem na tarefa 17.
 
@@ -752,7 +793,7 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | `backend/app/dates.py` | Responde "que dia é" no horário de Brasília, e quais são o dia anterior e o seguinte. | `APP_TIMEZONE`, `to_app_date`, `app_today`, `app_day_bounds`, `adjacent_days`, `week_days` | 6.4, 6.2 | `test_dates.py` |
 | `backend/app/rules/xp.py` | Guarda as regras de XP, adiamento, devolução, nível e barra, com os números no topo, e os textos do histórico. | `task_xp`, `effective_postponements`, `is_due_date_locked`, `postponements_after_date_change`, `postponed_due_date`, `xp_to_refund`, `completion_reason`, `uncompletion_reason`, `xp_to_next_level`, `level_progress`, `progress_percent` | 4.1, 4.2, 4.3, 4.4, 4.5 | `test_xp.py` |
 | `backend/app/routers/task_types.py` | API dos tipos de tarefa; também define `SessionDep` e `MAX_ID`, usados em `tasks.py`. | `POST /task-types`, `GET /task-types`, `PATCH /task-types/{task_type_id}`, `DELETE /task-types/{task_type_id}` | 6.1, 6.6 | `test_task_types.py` |
-| `backend/app/routers/tasks.py` | API das tarefas: criar, listar hoje, por dia e por semana, editar (inclusive a data), excluir, concluir, desmarcar e adiar. A lista do dia traz, em cada tarefa, a trava da data e o XP rendido. | `POST /tasks`, `GET /tasks/today`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `POST /tasks/{task_id}/complete`, `POST /tasks/{task_id}/uncomplete`, `POST /tasks/{task_id}/postpone`, `TaskView`, `DayTasks`, `build_day_tasks`, `task_view`, `xp_earned_by_task`, `ensure_date_is_not_past`, `ensure_due_date_can_change`, `change_due_date`, `change_completed` | 6.1, 6.2, 4.2, 4.3, 4.4 | `test_tasks.py` |
+| `backend/app/routers/tasks.py` | API das tarefas: criar, listar hoje, por dia e por semana, editar (inclusive a data, recusando a tela desatualizada), excluir, concluir, desmarcar e adiar. A lista do dia traz a data sugerida para uma tarefa nova e, em cada tarefa, a trava da data e o XP rendido. | `POST /tasks`, `GET /tasks/today`, `GET /tasks/day/{day}`, `GET /tasks/week/{day}`, `PUT /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `POST /tasks/{task_id}/complete`, `POST /tasks/{task_id}/uncomplete`, `POST /tasks/{task_id}/postpone`, `STALE_TASK_MESSAGE`, `TaskFields`, `TaskInput`, `TaskUpdate`, `TaskView`, `DayTasks` (com `new_task_due_date`), `build_day_tasks`, `task_view`, `xp_earned_by_task`, `ensure_date_is_not_past`, `ensure_due_date_can_change`, `change_completed` | 6.1, 6.2, 4.2, 4.3, 4.4 | `test_tasks.py` |
 | `backend/app/routers/player.py` | API do jogador: soma o histórico e devolve XP total, nível e barra. | `GET /player`, `Player` | 4.4, 4.5, 6.2 | `test_player.py` |
 | `frontend/index.html` | A página do app: o topo fixo com nível, XP, barra, o aviso de erro ao salvar e o aviso de que a tarefa saiu da tela; a barra de navegação (setas, calendário e "Hoje"); a lista do dia (atrasadas, pendentes e "Concluídas"), com os estados de carregando, erro e dia vazio; e o modelo do cartão, com o botão do título e a parte que abre (notas e Adiar). | `#player-level`, `#player-xp`, `#player-progress`, `#player-message`, `#save-message`, `#notice`, `#day-previous`, `#day-picker`, `#day-next`, `#day-today`, `#day-status`, `#day-error`, `#day-retry`, `#day-view`, `#overdue-list`, `#pending-title`, `#pending-list`, `#completed-section`, `#completed-list`, `#task-card-template` (`.task-toggle`, `.task-details`, `.task-notes`, `.task-postpone`) | 6.2, 6.3, 6.7 | `test_frontend.py` (inclusive `test_html_has_no_inline_code`) |
 | `frontend/css/style.css` | O visual: variáveis de cores e espaçamentos, layout de celular, topo, barra, navegação entre os dias, cartões, botão do título, notas, Adiar bloqueado e pedindo confirmação, seções, "Concluídas", foco e elementos escondidos. | variáveis em `:root`, `[hidden]`, `.visually-hidden`, `.top-bar`, `.xp-bar`, `.day-nav`, `.day-nav-arrow`, `.day-picker`, `.button`, `.task-card`, `.task-check`, `.task-toggle`, `.task-details`, `.task-notes`, `.task-section`, `.completed-section` | 6.3, 6.7 | `test_frontend.py` |
@@ -763,7 +804,7 @@ Serve para achar onde está cada parte do projeto. Lista só o que já existe. F
 | `backend/tests/test_dates.py` | Testa o fuso, o "hoje", os limites do dia, os dias vizinhos e a semana. | testes de `to_app_date`, `app_today`, `app_day_bounds`, `adjacent_days`, `week_days` | 6.4 | não se aplica |
 | `backend/tests/test_xp.py` | Testa XP, adiamentos, trava da data, data nova do Adiar, devolução, textos do histórico, níveis e barra, inclusive um total enorme. | testes de cada função de `xp.py` | 4.1, 4.2, 4.3, 4.4, 4.5 | não se aplica |
 | `backend/tests/test_task_types.py` | Testa a API dos tipos de tarefa. | testes de criar, listar, renomear e excluir, de campo desconhecido e de id que não volta | 6.1, 6.6 | não se aplica |
-| `backend/tests/test_tasks.py` | Testa a API das tarefas, com o "hoje" fixo em todos os testes do arquivo, inclusive a visão de hoje, a trava e o XP rendido na lista do dia. | `fixed_today`, auxiliares `set_now`, `insert_task`, `insert_xp_entry`, `update_data`, `complete_task`, `uncomplete_task`, `postpone_task`, `assert_postpone_refused`, `xp_total`, `groups`, `as_listed`, `today_tasks`, `listed_task` | 6.1, 6.2, 6.6, 4.2, 4.3, 4.4 | não se aplica |
+| `backend/tests/test_tasks.py` | Testa a API das tarefas, com o "hoje" fixo em todos os testes do arquivo, inclusive a visão de hoje, a trava, o XP rendido e a data sugerida na lista do dia, e a edição com a tela desatualizada ou no meio de um Concluir ou de um Adiar. | `fixed_today`, auxiliares `set_now`, `insert_task`, `insert_xp_entry`, `update_data`, `complete_task`, `uncomplete_task`, `postpone_task`, `assert_postpone_refused`, `xp_total`, `groups`, `as_listed`, `today_tasks`, `listed_task` | 6.1, 6.2, 6.6, 4.2, 4.3, 4.4 | não se aplica |
 | `backend/tests/test_player.py` | Testa a API do jogador, com o "hoje" fixo: fronteiras da tabela 4.5, histórico vazio, soma negativa, total enorme e a ligação com concluir, desmarcar e excluir. | `fixed_today`, auxiliares `get_player`, `player`, `insert_xp`, `create_medium_task` | 4.3, 4.4, 4.5, 6.7 | não se aplica |
 | `backend/tests/test_frontend.py` | Testa a entrega do front: a página abre com a CSP, os arquivos vão com `Cache-Control: no-cache` e respondem 304 quando não mudaram, a API fica sem esse cabeçalho, nada de `backend/` fica acessível, o `/docs` abre sem CSP, a API responde como antes, os `.js` não usam `innerHTML` e parecidos e os `.html` não têm script, atributo `on...` nem estilo dentro da página. | `EXPECTED_CSP`, `FORBIDDEN_IN_JAVASCRIPT`, `InlineCodeFinder`, `test_frontend_files_are_checked_before_use`, `test_unchanged_frontend_file_answers_304`, `test_api_does_not_get_the_frontend_cache_header`, `test_html_has_no_inline_code` | 6.5, 6.7, 10 (tarefa 9 e etapas 10.2 e 10.4) | não se aplica |
 | `backend/requirements.txt` | Fixa as versões das dependências. | não se aplica | 2 | não se aplica |

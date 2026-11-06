@@ -147,6 +147,7 @@ def update_data(**changes):
         "color": "#112233",
         "task_type_id": None,
         "due_date": "2026-11-01",
+        "shown_due_date": "2026-11-01",
     } | changes
 
 
@@ -415,6 +416,8 @@ def test_today_follows_brasilia_not_utc(client, test_engine, monkeypatch):
         {"id": 123},
         {"created_at": "2026-11-01T12:00:00Z"},
         {"note": "nome errado"},
+        # Só a edição recebe a data que a tela mostrava.
+        {"shown_due_date": "2026-11-01"},
     ],
 )
 def test_create_refuses_unknown_field(client, test_engine, extra_field):
@@ -716,6 +719,39 @@ def test_ends_of_the_calendar_have_a_null_neighbor(client, day, previous_day, ne
 
     assert tasks["previous_day"] == previous_day
     assert tasks["next_day"] == next_day
+
+
+# A data sugerida para uma tarefa nova é o dia listado quando ele é hoje ou depois. A última linha
+# é a última data possível, que também é aceita ao criar.
+@pytest.mark.parametrize("day", ["2026-11-01", "2026-11-06", "9999-12-31"])
+def test_day_suggests_the_listed_day_for_a_new_task(client, day):
+    assert day_tasks(client, day)["new_task_due_date"] == day
+
+
+# Num dia que já passou, a sugestão é hoje, porque a data nova não pode ser anterior a hoje.
+@pytest.mark.parametrize("day", ["2026-10-31", "0001-01-01"])
+def test_past_day_suggests_today_for_a_new_task(client, day):
+    assert day_tasks(client, day)["new_task_due_date"] == "2026-11-01"
+
+
+# Às 22h30 de 01/11 em Brasília (01h30 UTC de 02/11), a sugestão usa o mesmo "hoje" do day.
+def test_today_route_suggests_today_in_brasilia(client, monkeypatch):
+    set_now(monkeypatch, datetime(2026, 11, 2, 1, 30, tzinfo=timezone.utc))
+
+    tasks = today_tasks(client)
+
+    assert tasks["new_task_due_date"] == "2026-11-01"
+    assert tasks["new_task_due_date"] == tasks["day"]
+
+
+# A sugestão concorda com a regra da criação: a data sugerida num dia passado é aceita.
+def test_suggested_date_of_a_past_day_is_accepted(client):
+    suggested = day_tasks(client, "2026-10-31")["new_task_due_date"]
+
+    response = client.post("/tasks", json=task_data(due_date=suggested))
+
+    assert response.status_code == 201
+    assert response.json()["due_date"] == "2026-11-01"
 
 
 # Os casos da seção 4.2, com hoje em 01/11. Cada linha é um caso: os campos da tarefa, o dia
@@ -1155,7 +1191,9 @@ def test_update_keeps_fields_that_the_request_does_not_set(client, test_engine):
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
 
-    update_task(client, task_id, difficulty="easy", due_date="2026-10-30")
+    update_task(
+        client, task_id, difficulty="easy", due_date="2026-10-30", shown_due_date="2026-10-30"
+    )
 
     saved_task = tasks_in_database(test_engine)[0]
     assert saved_task.id == task_id
@@ -1168,7 +1206,8 @@ def test_update_keeps_fields_that_the_request_does_not_set(client, test_engine):
 
 # Sem esta recusa, esquecer um campo apagaria as notas ou voltaria a cor ao padrão.
 @pytest.mark.parametrize(
-    "field", ["title", "notes", "difficulty", "color", "task_type_id", "due_date"]
+    "field",
+    ["title", "notes", "difficulty", "color", "task_type_id", "due_date", "shown_due_date"],
 )
 def test_update_refuses_missing_field(client, test_engine, field):
     task = create_task(client, notes="Capítulo 3", color="#ABCDEF")
@@ -1404,6 +1443,7 @@ def test_same_date_accepts_editing_in_any_state(client, test_engine, fields):
         title="Título novo",
         difficulty="easy",
         due_date=fields["due_date"].isoformat(),
+        shown_due_date=fields["due_date"].isoformat(),
     )
 
     assert updated["title"] == "Título novo"
@@ -1430,7 +1470,7 @@ def test_update_refuses_id_out_of_range(client, test_engine, task_id):
 def test_moving_date_later_counts_one_postponement(client, test_engine, postponements, expected):
     task_id = insert_task(test_engine, due_date=date(2026, 11, 5), postponements=postponements)
 
-    updated = update_task(client, task_id, due_date="2026-11-10")
+    updated = update_task(client, task_id, due_date="2026-11-10", shown_due_date="2026-11-05")
 
     assert updated["due_date"] == "2026-11-10"
     assert updated["postponements"] == expected
@@ -1453,7 +1493,9 @@ def test_repeating_the_same_update_counts_one_postponement(client):
     task = create_task(client)
 
     update_task(client, task["id"], due_date="2026-11-05")
-    updated = update_task(client, task["id"], due_date="2026-11-05")
+    updated = update_task(
+        client, task["id"], due_date="2026-11-05", shown_due_date="2026-11-05"
+    )
 
     assert updated["postponements"] == 1
 
@@ -1463,7 +1505,7 @@ def test_repeating_the_same_update_counts_one_postponement(client):
 def test_overdue_task_adds_days_late_to_the_counter(client, test_engine, new_date):
     task_id = insert_task(test_engine, due_date=date(2026, 10, 30))
 
-    updated = update_task(client, task_id, due_date=new_date)
+    updated = update_task(client, task_id, due_date=new_date, shown_due_date="2026-10-30")
 
     assert updated["due_date"] == new_date
     assert updated["postponements"] == 3
@@ -1474,7 +1516,7 @@ def test_overdue_task_adds_days_late_to_the_counter(client, test_engine, new_dat
 def test_moving_date_earlier_keeps_the_counter(client, test_engine, new_date):
     task_id = insert_task(test_engine, due_date=date(2026, 11, 5), postponements=1)
 
-    updated = update_task(client, task_id, due_date=new_date)
+    updated = update_task(client, task_id, due_date=new_date, shown_due_date="2026-11-05")
 
     assert updated["due_date"] == new_date
     assert updated["postponements"] == 1
@@ -1486,7 +1528,10 @@ def test_update_refuses_new_date_before_today(client, test_engine, due_date):
     task_id = insert_task(test_engine, due_date=due_date)
 
     response = assert_update_refused(
-        client, test_engine, task_id, update_data(due_date="2026-10-31")
+        client,
+        test_engine,
+        task_id,
+        update_data(due_date="2026-10-31", shown_due_date=due_date.isoformat()),
     )
 
     assert response.json()["detail"] == PAST_DATE_MESSAGE
@@ -1509,7 +1554,9 @@ def test_date_still_changes_with_two_effective_postponements(
 ):
     task_id = insert_task(test_engine, due_date=due_date, postponements=postponements)
 
-    updated = update_task(client, task_id, due_date="2026-11-05")
+    updated = update_task(
+        client, task_id, due_date="2026-11-05", shown_due_date=due_date.isoformat()
+    )
 
     assert updated["due_date"] == "2026-11-05"
     assert updated["postponements"] == 3
@@ -1522,7 +1569,11 @@ def test_task_locked_by_manual_postponements_refuses_any_new_date(client, test_e
     task_id = insert_task(test_engine, due_date=date(2026, 11, 6), postponements=3)
 
     response = assert_update_refused(
-        client, test_engine, task_id, update_data(due_date=new_date), status_code=409
+        client,
+        test_engine,
+        task_id,
+        update_data(due_date=new_date, shown_due_date="2026-11-06"),
+        status_code=409,
     )
 
     assert response.json()["detail"] == LOCKED_DATE_MESSAGE
@@ -1541,7 +1592,11 @@ def test_task_locked_by_days_late_refuses_new_date(
     task_id = insert_task(test_engine, due_date=due_date, postponements=postponements)
 
     response = assert_update_refused(
-        client, test_engine, task_id, update_data(due_date=new_date), status_code=409
+        client,
+        test_engine,
+        task_id,
+        update_data(due_date=new_date, shown_due_date=due_date.isoformat()),
+        status_code=409,
     )
 
     assert response.json()["detail"] == LOCKED_DATE_MESSAGE
@@ -1559,7 +1614,7 @@ def test_completed_task_refuses_changing_date(client, test_engine, due_date, new
         client,
         test_engine,
         task_id,
-        update_data(difficulty="easy", due_date=new_date),
+        update_data(difficulty="easy", due_date=new_date, shown_due_date=due_date.isoformat()),
         status_code=409,
     )
 
@@ -1579,9 +1634,13 @@ def test_completed_task_refuses_changing_date(client, test_engine, due_date, new
 )
 def test_past_date_is_refused_before_checking_task_state(client, test_engine, fields, new_date):
     task_id = insert_task(test_engine, **fields)
+    shown_due_date = fields.get("due_date", date(2026, 11, 1)).isoformat()
 
     response = assert_update_refused(
-        client, test_engine, task_id, update_data(difficulty="easy", due_date=new_date)
+        client,
+        test_engine,
+        task_id,
+        update_data(difficulty="easy", due_date=new_date, shown_due_date=shown_due_date),
     )
 
     assert response.json()["detail"] == PAST_DATE_MESSAGE
@@ -1591,7 +1650,10 @@ def test_past_date_is_refused_before_checking_task_type(client, test_engine):
     task_id = insert_task(test_engine, due_date=date(2026, 11, 5))
 
     response = assert_update_refused(
-        client, test_engine, task_id, update_data(due_date="2026-10-31", task_type_id=999)
+        client,
+        test_engine,
+        task_id,
+        update_data(due_date="2026-10-31", shown_due_date="2026-11-05", task_type_id=999),
     )
 
     assert response.json()["detail"] == PAST_DATE_MESSAGE
@@ -1604,12 +1666,18 @@ def test_past_date_is_refused_before_checking_task_type(client, test_engine):
 )
 def test_unknown_task_type_is_refused_before_changing_date(client, test_engine, fields):
     task_id = insert_task(test_engine, **fields)
+    shown_due_date = fields.get("due_date", date(2026, 11, 1)).isoformat()
 
     response = assert_update_refused(
         client,
         test_engine,
         task_id,
-        update_data(difficulty="easy", due_date="2026-11-10", task_type_id=999),
+        update_data(
+            difficulty="easy",
+            due_date="2026-11-10",
+            shown_due_date=shown_due_date,
+            task_type_id=999,
+        ),
     )
 
     assert response.json()["detail"] == UNKNOWN_TYPE_MESSAGE
@@ -1625,7 +1693,7 @@ def test_completed_and_locked_task_gets_the_completed_message(client, test_engin
         client,
         test_engine,
         task_id,
-        update_data(difficulty="easy", due_date="2026-11-10"),
+        update_data(difficulty="easy", due_date="2026-11-10", shown_due_date="2026-11-05"),
         status_code=409,
     )
 
@@ -1636,15 +1704,23 @@ def test_completed_and_locked_task_gets_the_completed_message(client, test_engin
 def test_three_date_changes_lock_the_date_but_title_still_changes(client, test_engine):
     task = create_task(client)
 
+    shown_due_date = task["due_date"]
     for new_date, expected in [("2026-11-02", 1), ("2026-11-03", 2), ("2026-11-04", 3)]:
-        updated = update_task(client, task["id"], due_date=new_date)
+        updated = update_task(client, task["id"], due_date=new_date, shown_due_date=shown_due_date)
         assert updated["postponements"] == expected
+        shown_due_date = updated["due_date"]
 
     assert_update_refused(
-        client, test_engine, task["id"], update_data(due_date="2026-11-05"), status_code=409
+        client,
+        test_engine,
+        task["id"],
+        update_data(due_date="2026-11-05", shown_due_date=shown_due_date),
+        status_code=409,
     )
 
-    updated = update_task(client, task["id"], title="Só o título", due_date="2026-11-04")
+    updated = update_task(
+        client, task["id"], title="Só o título", due_date="2026-11-04", shown_due_date="2026-11-04"
+    )
 
     assert updated["title"] == "Só o título"
     assert updated["postponements"] == 3
@@ -1657,7 +1733,7 @@ def test_date_change_counts_days_late_in_brasilia(client, test_engine, monkeypat
     monkeypatch.setattr("app.dates.utc_now", lambda: fixed_now)
     task_id = insert_task(test_engine, due_date=date(2026, 10, 30))
 
-    updated = update_task(client, task_id, due_date="2026-10-31")
+    updated = update_task(client, task_id, due_date="2026-10-31", shown_due_date="2026-10-30")
 
     assert updated["postponements"] == 2
 
@@ -1669,9 +1745,139 @@ def test_lock_counts_days_late_in_brasilia(client, test_engine, monkeypatch):
     monkeypatch.setattr("app.dates.utc_now", lambda: fixed_now)
     task_id = insert_task(test_engine, due_date=date(2026, 10, 31), postponements=2)
 
-    updated = update_task(client, task_id, due_date="2026-11-05")
+    updated = update_task(client, task_id, due_date="2026-11-05", shown_due_date="2026-10-31")
 
     assert updated["postponements"] == 3
+
+
+# A tela mostrava 01/11, mas a tarefa já está em 05/11 (foi adiada em outro aparelho). Mexendo
+# ou não na data, a gravação é recusada e nada muda.
+@pytest.mark.parametrize("new_date", ["2026-11-01", "2026-11-10"])
+def test_update_with_an_old_shown_date_gets_409(client, test_engine, new_date):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 5), postponements=1)
+
+    response = assert_update_refused(
+        client,
+        test_engine,
+        task_id,
+        update_data(due_date=new_date, shown_due_date="2026-11-01"),
+        status_code=409,
+    )
+
+    assert response.json()["detail"] == STALE_SCREEN_MESSAGE
+
+
+# A tela mostrava a atrasada em 30/10, e ela foi adiada em outro aparelho. O formulário velho
+# manda a mesma data que mostrava, então não é mudança de data, e a resposta não é o 422 da data
+# anterior a hoje, que confundiria: é o 409 da tela desatualizada.
+def test_update_of_an_overdue_task_postponed_elsewhere_gets_409(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 2), postponements=3)
+
+    response = assert_update_refused(
+        client,
+        test_engine,
+        task_id,
+        update_data(due_date="2026-10-30", shown_due_date="2026-10-30"),
+        status_code=409,
+    )
+
+    assert response.json()["detail"] == STALE_SCREEN_MESSAGE
+
+
+# Corrida com o Concluir, como nos testes do Adiar: a sessão velha lê a tarefa pendente, outro
+# pedido a conclui, e só então a edição roda com a leitura velha. Sem a condição no UPDATE, a
+# tarefa concluída ficaria com a data mudada, contra a seção 6.1. A variável old_task precisa
+# existir: a sessão só guarda a leitura enquanto algo aponta para ela.
+def test_update_with_an_old_read_does_not_change_a_completed_task(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 1), difficulty="medium")
+    task_update = tasks_router.TaskUpdate(
+        **update_data(difficulty="medium", due_date="2026-11-05")
+    )
+
+    with Session(test_engine) as old_session:
+        old_task = old_session.get(Task, task_id)
+        complete_task(client, task_id)
+        assert old_session.get(Task, task_id).completed is False
+
+        with pytest.raises(HTTPException) as refusal:
+            tasks_router.update_task(task_id, task_update, old_session)
+
+    assert refusal.value.status_code == 409
+    assert refusal.value.detail == STALE_SCREEN_MESSAGE
+    assert old_task.id == task_id
+    [task] = tasks_in_database(test_engine)
+    assert task.completed is True
+    assert task.due_date == date(2026, 11, 1)
+    assert task.title == "Tarefa"
+    assert task_amounts(test_engine, task_id) == [25]
+
+
+# Corrida com o Adiar: a edição leu a tarefa em 01/11 e muda a data para 10/11, contando 1
+# adiamento. No meio, o Adiar a levou para 02/11 com 1 adiamento. Sem a condição, a edição
+# gravaria 10/11 com contador 1, e um adiamento se perderia.
+def test_update_with_an_old_read_keeps_the_postponement(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 1))
+    task_update = tasks_router.TaskUpdate(**update_data(due_date="2026-11-10"))
+
+    with Session(test_engine) as old_session:
+        old_task = old_session.get(Task, task_id)
+        postpone_task(client, task_id, "2026-11-01")
+        assert old_session.get(Task, task_id).postponements == 0
+
+        with pytest.raises(HTTPException) as refusal:
+            tasks_router.update_task(task_id, task_update, old_session)
+
+    assert refusal.value.status_code == 409
+    assert refusal.value.detail == STALE_SCREEN_MESSAGE
+    assert old_task.id == task_id
+    [task] = tasks_in_database(test_engine)
+    assert task.due_date == date(2026, 11, 2)
+    assert task.postponements == 1
+    assert task.title == "Tarefa"
+
+
+# Registra o comportamento cauteloso: se a tarefa foi concluída no meio da edição, até mudar só
+# o título é recusado. A tela recarrega a lista, e a pessoa edita de novo a tarefa concluída.
+def test_update_title_with_an_old_read_after_complete_gets_409(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 1), difficulty="medium")
+    task_update = tasks_router.TaskUpdate(**update_data(difficulty="medium"))
+
+    with Session(test_engine) as old_session:
+        old_task = old_session.get(Task, task_id)
+        complete_task(client, task_id)
+
+        with pytest.raises(HTTPException) as refusal:
+            tasks_router.update_task(task_id, task_update, old_session)
+
+    assert refusal.value.status_code == 409
+    assert refusal.value.detail == STALE_SCREEN_MESSAGE
+    assert old_task.id == task_id
+    assert tasks_in_database(test_engine)[0].title == "Tarefa"
+
+
+# Os 409 vão do mais definitivo para o mais passageiro, como no Adiar: a tarefa concluída que
+# mudaria de data recebe o "desmarque", que recarregar não resolveria, mesmo com a tela velha.
+def test_update_completed_task_with_old_screen_says_to_uncomplete(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 5), **COMPLETED_FIELDS)
+
+    response = assert_update_refused(
+        client,
+        test_engine,
+        task_id,
+        update_data(difficulty="easy", due_date="2026-11-10", shown_due_date="2026-11-01"),
+        status_code=409,
+    )
+
+    assert response.json()["detail"] == COMPLETED_DATE_MESSAGE
+
+
+# O dado é conferido antes do estado da tarefa: com a tela velha e uma cor inválida, vale o 422.
+def test_update_invalid_field_with_old_screen_gets_422(client, test_engine):
+    task_id = insert_task(test_engine, due_date=date(2026, 11, 5))
+
+    assert_update_refused(
+        client, test_engine, task_id, update_data(color="#FFF", shown_due_date="2026-11-01")
+    )
 
 
 def test_complete_returns_the_task_and_the_xp_change(client, test_engine):
@@ -2610,7 +2816,12 @@ def test_three_postpones_lock_the_date_but_title_and_completion_still_work(clien
     assert response.json()["detail"] == LOCKED_DATE_MESSAGE
 
     updated = update_task(
-        client, task["id"], title="Só o título", difficulty="medium", due_date=shown_due_date
+        client,
+        task["id"],
+        title="Só o título",
+        difficulty="medium",
+        due_date=shown_due_date,
+        shown_due_date=shown_due_date,
     )
     assert updated["title"] == "Só o título"
     assert updated["postponements"] == 3
