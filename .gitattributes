@@ -1,0 +1,20 @@
+# Fim de linha: o Git decide sozinho o que é texto, e todo texto
+# entra no repositório com LF e sai na pasta com LF, em qualquer
+# computador, mesmo com core.autocrlf=true
+* text=auto eol=lf
+
+# Binários: o Git nunca mexe nos bytes nem mostra diferença linha a linha
+# Imagens e ícones do PWA (tarefa 14)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+# Fontes locais (tarefa 13)
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+# Banco SQLite: já fica fora pelo .gitignore; esta linha é uma segunda proteção
+*.db binary

@@ -32,6 +32,7 @@ Sou dev júnior, em transição de carreira, aprendendo Python e desenvolvimento
     - **Segredo colado por engano:** se eu colar um segredo na conversa, não o escreva em nenhum arquivo e me avise.
     - **`.env` proibido:** você nunca abre, lê, mostra nem copia o conteúdo do `.env` ou de qualquer variação (`.env.local`, `.env.production` etc.), em nenhum momento e por nenhum meio, nem para conferir. Se precisar saber se uma variável existe, me pergunte. Hoje a trava em `.claude/settings.json` também bloqueia o `.env.example`, sem exceção; ele só será liberado se um dia for necessário, com a minha aprovação.
     - **Conferência antes do commit:** ao terminar cada etapa, antes do meu commit, confira os arquivos novos e alterados à procura de valores secretos e diga no resumo que conferiu. Os arquivos proibidos no item anterior ficam fora dessa conferência.
+15. **Fim de linha LF.** Arquivos do projeto são gravados com o Write ou o Edit, ou, num script, com `write_bytes`; nunca com `write_text` sem `newline=""`. O `.gitattributes` corrige o fim de linha só no commit; o arquivo na pasta continua com CRLF até alguém regravá-lo.
 
 ## Exceções aprovadas
 
@@ -60,6 +61,8 @@ O detalhe de cada arquivo está no Mapa do código (seção 12 da especificaçã
 .
 ├── CLAUDE.md
 ├── README.md
+├── .gitattributes
+├── .gitignore
 ├── .claude/
 │   └── settings.json
 ├── docs/
