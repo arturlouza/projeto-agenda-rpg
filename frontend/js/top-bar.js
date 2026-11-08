@@ -53,8 +53,9 @@ function showSaveMessage(text) {
 const NOTICE_MS = 10000;
 let noticeTimer = null;
 
-// O aviso de que a tarefa saiu da tela: adiada, concluída olhando outro dia ou desmarcada de
-// volta ao dia marcado. Uma linha só, para os três; o texto novo substitui o anterior.
+// O aviso de que a tarefa saiu da tela: adiada, criada para outro dia, concluída olhando outro
+// dia ou desmarcada de volta ao dia marcado. Uma linha só, para todos; o texto novo substitui o
+// anterior.
 function showNotice(text) {
   const notice = document.getElementById("notice");
   notice.textContent = text;

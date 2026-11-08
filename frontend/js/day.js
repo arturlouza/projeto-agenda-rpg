@@ -213,9 +213,9 @@ async function loadDay() {
 
 const SAVE_ERROR_TEXT = "Não foi possível salvar. Tente de novo.";
 
-// Enquanto uma gravação espera a resposta (caixinha ou Adiar), as caixinhas e os botões Adiar
-// ficam bloqueados (uma gravação por vez). Os botões do título continuam livres: abrir e fechar
-// não grava nada.
+// Enquanto uma gravação espera a resposta (caixinha, Adiar ou formulário), as caixinhas e os
+// botões Adiar ficam bloqueados (uma gravação por vez). Os botões do título continuam livres:
+// abrir e fechar não grava nada.
 let saving = false;
 
 function disableTaskControls() {

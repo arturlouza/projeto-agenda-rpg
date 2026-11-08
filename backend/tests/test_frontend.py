@@ -1,8 +1,12 @@
 import re
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import get_args
 
 import pytest
+
+from app.models import DEFAULT_TASK_COLOR
+from app.routers.tasks import Difficulty, TaskInput
 
 # As pastas são achadas a partir deste arquivo: tests/ está em backend/, que está na raiz.
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -80,6 +84,50 @@ def index_scripts():
     finder.feed((FRONTEND_DIR / "index.html").read_text(encoding="utf-8"))
     finder.close()
     return finder.scripts
+
+
+# Lê o formulário de tarefa (<form id="task-form">): os atributos do <form>, os campos (input,
+# select e textarea) com os atributos deles, o "for" de cada <label> e os valores das opções da
+# dificuldade.
+class TaskFormFinder(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.form = None
+        self.inside_form = False
+        self.fields = []
+        self.label_targets = []
+        self.difficulty_options = []
+        self.current_select = None
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "form" and attributes.get("id") == "task-form":
+            self.form = attributes
+            self.inside_form = True
+        if not self.inside_form:
+            return
+        if tag in ("input", "select", "textarea"):
+            self.fields.append(attributes)
+        if tag == "select":
+            self.current_select = attributes.get("name")
+        if tag == "label":
+            self.label_targets.append(attributes.get("for"))
+        if tag == "option" and self.current_select == "difficulty":
+            self.difficulty_options.append(attributes.get("value"))
+
+    def handle_endtag(self, tag):
+        if tag == "form":
+            self.inside_form = False
+        if tag == "select":
+            self.current_select = None
+
+
+def task_form():
+    finder = TaskFormFinder()
+    finder.feed((FRONTEND_DIR / "index.html").read_text(encoding="utf-8"))
+    finder.close()
+    assert finder.form is not None, "o index.html não tem o <form id=\"task-form\">"
+    return finder
 
 
 def test_main_page_opens_with_the_csp(client):
@@ -286,3 +334,44 @@ def test_no_top_level_name_is_declared_twice():
     assert files_by_name
     repeated = {name: files for name, files in files_by_name.items() if len(files) > 1}
     assert repeated == {}
+
+
+# O campo de cor abre mostrando a cor escrita no HTML, e o "Cor padrão" volta a ela. Sem cor
+# escolhida, o pedido não leva cor e o servidor aplica DEFAULT_TASK_COLOR. Os dois precisam ser
+# a mesma cor, senão o formulário mostraria uma e a tarefa ficaria com outra.
+def test_task_form_default_color_matches_the_server():
+    colors = [field for field in task_form().fields if field.get("type") == "color"]
+
+    assert len(colors) == 1
+    assert colors[0]["value"] == DEFAULT_TASK_COLOR
+
+
+# As opções da dificuldade são exatamente as que o servidor aceita, na mesma ordem. Um erro de
+# digitação, como "meduim", daria 422 só na hora de salvar.
+def test_task_form_difficulties_match_the_server():
+    assert task_form().difficulty_options == list(get_args(Difficulty))
+
+
+# O formulário acha o campo de um erro 422 pelo name, que é o nome do campo na API, e escreve a
+# frase com o texto do <label> dele. Por isso cada campo de TaskInput está no formulário com o
+# mesmo name, e cada campo tem um <label> que aponta para ele.
+def test_task_form_fields_match_the_api():
+    form = task_form()
+
+    assert sorted(field["name"] for field in form.fields) == sorted(TaskInput.model_fields)
+    for field in form.fields:
+        assert field["id"] in form.label_targets, field
+
+
+# As regras ficam só no servidor (tasks.py): o HTML não leva nenhum limite que o navegador
+# conferiria, e o novalidate desliga a conferência dele. Sem method e sem action, o <form> só
+# serve para o Enter salvar; a gravação é por fetch (seção 6.7).
+def test_task_form_leaves_the_rules_to_the_server():
+    form = task_form()
+
+    assert "novalidate" in form.form
+    assert "method" not in form.form
+    assert "action" not in form.form
+    for field in form.fields:
+        for attribute in ["required", "minlength", "maxlength", "pattern", "min", "max"]:
+            assert attribute not in field, (field, attribute)

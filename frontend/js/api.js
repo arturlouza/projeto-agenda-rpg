@@ -10,12 +10,21 @@ const API_BASE = "./";
 
 // Toda chamada à API passa por aqui (seção 6.5). Na tarefa 15, esta função passa a tratar o 401.
 // Se a resposta não for de sucesso, o erro leva o código em error.status, para a tela
-// reconhecer o 409 sem ler texto. Erro de rede não tem código: error.status fica undefined.
+// reconhecer o 409 sem ler texto, e o motivo da recusa em error.detail, para o formulário
+// mostrar o 422. Erro de rede não tem resposta: error.status e error.detail ficam undefined.
 async function apiRequest(path, options) {
   const response = await fetch(API_BASE + path, options);
   if (!response.ok) {
     const error = new Error("A API respondeu " + response.status);
     error.status = response.status;
+    // O "detail" é um texto (as recusas das rotas, em português) ou uma lista (a validação
+    // automática). Se a resposta não for JSON com "detail" (um erro 500 em texto, um corpo
+    // vazio), fica undefined, e a tela mostra a mensagem genérica.
+    try {
+      error.detail = (await response.json()).detail;
+    } catch {
+      error.detail = undefined;
+    }
     throw error;
   }
   return response.json();

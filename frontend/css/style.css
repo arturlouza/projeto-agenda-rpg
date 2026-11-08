@@ -142,7 +142,10 @@ body {
 .task-toggle:focus-visible,
 .completed-section > summary:focus-visible,
 .button:focus-visible,
-.day-picker:focus-visible {
+.day-picker:focus-visible,
+.form-field input:focus-visible,
+.form-field select:focus-visible,
+.form-field textarea:focus-visible {
   outline: 3px solid var(--color-focus);
   outline-offset: 2px;
 }
@@ -201,9 +204,17 @@ body {
   cursor: pointer;
 }
 
-/* Botão bloqueado: o Adiar da tarefa travada e os botões durante uma gravação. */
+/* O botão principal do formulário (Salvar): preenchido com a cor de destaque. */
+.button.is-primary {
+  background: var(--color-accent);
+  color: var(--color-surface);
+}
+
+/* Botão bloqueado: o Adiar da tarefa travada e os botões durante uma gravação. Vem depois do
+   .is-primary para o Salvar bloqueado também perder a cor. */
 .button:disabled {
   border-color: var(--color-border);
+  background: var(--color-surface);
   color: var(--color-text-muted);
   cursor: not-allowed;
 }
@@ -352,4 +363,104 @@ body {
 
 .completed-section > .task-list {
   margin-top: var(--space-2);
+}
+
+/* O "Nova tarefa": a largura toda, no alto da lista do dia. */
+.new-task-button {
+  width: 100%;
+  margin-bottom: var(--space-4);
+}
+
+/* O formulário de tarefa. O navegador já centraliza o <dialog> aberto com showModal(). A
+   largura deixa 16 px de cada lado no celular; a altura nunca passa da tela, e o que não couber
+   (com o teclado aberto) rola por dentro, só na vertical. */
+.form-dialog {
+  width: calc(100% - 2 * var(--space-3));
+  max-width: var(--content-max-width);
+  max-height: calc(100% - 2 * var(--space-3));
+  overflow-y: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+/* O fundo escuro atrás do formulário, que mostra que a lista não recebe toque. */
+.form-dialog::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+
+/* Um campo: o rótulo em cima e o campo embaixo, na largura toda, com 48 px de altura. */
+.form-field {
+  margin-bottom: var(--space-3);
+}
+
+.form-field label {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-weight: bold;
+}
+
+.form-field input,
+.form-field select,
+.form-field textarea {
+  width: 100%;
+  min-height: var(--touch-size);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+
+/* As notas: várias linhas, com espaço em cima e embaixo; dá para aumentar a altura, não a
+   largura, para não criar rolagem para o lado. */
+.form-field textarea {
+  padding: var(--space-2);
+  resize: vertical;
+}
+
+/* O campo que o erro 422 apontou: a borda na cor de erro. */
+.form-field [aria-invalid="true"] {
+  border: 2px solid var(--color-error);
+}
+
+/* A cor: o quadrado de 48 × 48 e o "Cor padrão" lado a lado. */
+.form-color-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.form-field .form-color-row input {
+  width: var(--touch-size);
+  height: var(--touch-size);
+  padding: var(--space-1);
+  cursor: pointer;
+}
+
+/* Textos embaixo de um campo (o erro ao carregar os tipos) e o erro ao salvar. overflow-wrap:
+   anywhere quebra um texto longo sem espaços em vez de empurrar a tela para o lado. */
+.form-hint,
+.form-error {
+  margin: var(--space-1) 0 0;
+  overflow-wrap: anywhere;
+}
+
+.form-hint.is-error,
+.form-error {
+  color: var(--color-error);
+}
+
+.form-error {
+  margin: 0 0 var(--space-3);
+}
+
+/* Cancelar e Salvar à direita, com o Salvar por último, perto do polegar. */
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }

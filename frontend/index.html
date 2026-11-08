@@ -11,6 +11,7 @@
   <script src="js/api.js" defer></script>
   <script src="js/top-bar.js" defer></script>
   <script src="js/day.js" defer></script>
+  <script src="js/task-form.js" defer></script>
   <script src="js/app.js" defer></script>
 </head>
 <body>
@@ -28,8 +29,8 @@
            lista rolada. O top-bar.js escreve o texto quando precisa. -->
       <p id="save-message" class="player-message is-error" role="status" hidden></p>
       <!-- Aviso de que a tarefa saiu da tela: adiada (com a data nova que o servidor devolveu),
-           concluída olhando outro dia ou desmarcada de volta ao dia marcado. Fica no topo
-           porque o cartão some da lista. -->
+           criada para outro dia, concluída olhando outro dia ou desmarcada de volta ao dia
+           marcado. Fica no topo porque o cartão some da lista ou nem aparece nela. -->
       <p id="notice" class="player-message" role="status" hidden></p>
     </div>
   </header>
@@ -60,6 +61,10 @@
     </div>
 
     <div id="day-view" hidden>
+      <!-- Abre o formulário de tarefa nova. Fica dentro do #day-view: só aparece com um dia na
+           tela, que traz a data sugerida (new_task_due_date). -->
+      <button type="button" id="new-task" class="button new-task-button">Nova tarefa</button>
+
       <section id="overdue-section" class="task-section is-overdue" hidden>
         <h2 class="section-title">Atrasadas</h2>
         <ul id="overdue-list" class="task-list"></ul>
@@ -81,6 +86,68 @@
       </details>
     </div>
   </main>
+
+  <!-- Formulário de tarefa nova, aberto pelo task-form.js com showModal(): fica por cima de
+       tudo, e o resto da página não recebe toque nem foco. O Esc e o gesto de voltar do Android
+       fecham. O <form> não tem method nem action: o task-form.js cancela o envio do navegador e
+       grava por fetch (seção 6.7). novalidate e a falta de required e maxlength deixam as regras
+       só no servidor, em tasks.py. Cada name é o nome do campo na API, para a tela achar o campo
+       que o erro 422 aponta. O value da cor é a cor padrão do servidor (DEFAULT_TASK_COLOR, em
+       models.py); um teste confere que os dois são iguais. -->
+  <dialog id="task-form-dialog" class="form-dialog" aria-labelledby="task-form-heading">
+    <form id="task-form" novalidate>
+      <h2 id="task-form-heading" class="section-title">Nova tarefa</h2>
+
+      <div class="form-field">
+        <label for="task-form-title">Título</label>
+        <input type="text" id="task-form-title" name="title" autocomplete="off" autofocus>
+      </div>
+
+      <div class="form-field">
+        <label for="task-form-due-date">Data</label>
+        <input type="date" id="task-form-due-date" name="due_date">
+      </div>
+
+      <div class="form-field">
+        <label for="task-form-difficulty">Dificuldade</label>
+        <select id="task-form-difficulty" name="difficulty">
+          <option value="easy" selected>Fácil</option>
+          <option value="medium">Médio</option>
+          <option value="hard">Difícil</option>
+        </select>
+      </div>
+
+      <div class="form-field">
+        <label for="task-form-color">Cor</label>
+        <div class="form-color-row">
+          <input type="color" id="task-form-color" name="color" value="#F5E6C8">
+          <button type="button" id="task-form-default-color" class="button">Cor padrão</button>
+        </div>
+      </div>
+
+      <div class="form-field">
+        <label for="task-form-type">Tipo</label>
+        <!-- Os tipos entram pelo task-form.js, depois do "Sem tipo", na ordem da API. -->
+        <select id="task-form-type" name="task_type_id">
+          <option value="">Sem tipo</option>
+        </select>
+        <p id="task-form-types-error" class="form-hint is-error" hidden>Não foi possível carregar os tipos. Dá para salvar sem tipo.</p>
+      </div>
+
+      <div class="form-field">
+        <label for="task-form-notes">Notas</label>
+        <textarea id="task-form-notes" name="notes" rows="4"></textarea>
+      </div>
+
+      <!-- Erro ao salvar. Fica dentro do formulário porque o topo está atrás do fundo escuro. -->
+      <p id="task-form-error" class="form-error" role="alert" hidden></p>
+
+      <div class="form-actions">
+        <button type="button" id="task-form-cancel" class="button">Cancelar</button>
+        <button type="submit" id="task-form-save" class="button is-primary">Salvar</button>
+      </div>
+    </form>
+  </dialog>
 
   <!-- Modelo do cartão de uma tarefa. O navegador não mostra o que está num <template>: o day.js
        copia este modelo para cada tarefa e preenche os textos. No <label>, a caixinha de
