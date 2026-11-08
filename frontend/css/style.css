@@ -210,8 +210,15 @@ body {
   color: var(--color-surface);
 }
 
+/* Ação perigosa (o Excluir do formulário): borda e texto na cor de erro, com contraste de 7,5
+   para 1 sobre o branco. */
+.button.is-danger {
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
 /* Botão bloqueado: o Adiar da tarefa travada e os botões durante uma gravação. Vem depois do
-   .is-primary para o Salvar bloqueado também perder a cor. */
+   .is-primary e do .is-danger para o Salvar e o Excluir bloqueados também perderem a cor. */
 .button:disabled {
   border-color: var(--color-border);
   background: var(--color-surface);
@@ -224,6 +231,14 @@ body {
 .button.is-confirming {
   border-color: var(--color-warning);
   background: var(--color-warning);
+  color: var(--color-surface);
+}
+
+/* O Excluir pedindo confirmação: o fundo na cor de erro, e não na de aviso. Texto branco, com
+   contraste de 7,5 para 1. Três classes ganham das duas do .is-confirming. */
+.button.is-danger.is-confirming {
+  border-color: var(--color-error);
+  background: var(--color-error);
   color: var(--color-surface);
 }
 
@@ -485,4 +500,16 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+/* A área do Excluir, só na edição: separada do Salvar por 24 px e uma linha fina, com o texto em
+   cima e o botão embaixo, à esquerda, do lado oposto ao Salvar. */
+.form-delete-area {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.form-delete-area .form-hint {
+  margin: 0 0 var(--space-2);
 }

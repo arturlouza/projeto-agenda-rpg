@@ -25,12 +25,12 @@ document.addEventListener("visibilitychange", function () {
   }
 });
 
-// Todo clique da página "sobe" até o document. Se ele não começou no botão que pede
-// confirmação, a confirmação acaba. O clique que a iniciou chega aqui depois, com o alvo igual
-// ao botão, e por isso não a cancela.
+// Todo clique da página "sobe" até o document, também os de dentro do formulário. Se ele não
+// começou no botão que pede confirmação (Adiar ou Excluir), a confirmação acaba. O clique que a
+// iniciou chega aqui depois, com o alvo igual ao botão, e por isso não a cancela.
 document.addEventListener("click", function (event) {
   if (confirmButton !== null && event.target !== confirmButton) {
-    cancelPostponeConfirmation();
+    cancelConfirmation();
   }
 });
 

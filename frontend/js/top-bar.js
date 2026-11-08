@@ -55,7 +55,8 @@ let noticeTimer = null;
 
 // O aviso de que a tarefa saiu da tela: adiada, criada para outro dia, concluída olhando outro
 // dia ou desmarcada de volta ao dia marcado. Também a data nova de uma tarefa editada, e se ela
-// contou como adiamento. Uma linha só, para todos; o texto novo substitui o anterior.
+// contou como adiamento, e a tarefa excluída. Uma linha só, para todos; o texto novo substitui o
+// anterior.
 function showNotice(text) {
   const notice = document.getElementById("notice");
   notice.textContent = text;

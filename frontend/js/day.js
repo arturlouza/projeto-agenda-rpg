@@ -96,8 +96,11 @@ function createTaskCard(task) {
     const postpone = card.querySelector(".task-postpone");
     postpone.disabled = saving || task.due_date_locked;
     card.querySelector(".task-postpone-locked").hidden = !task.due_date_locked;
+    // O Adiar pede confirmação (seção 5). A função entregue só roda no segundo toque.
     postpone.addEventListener("click", function () {
-      handlePostponeClick(task, postpone);
+      handleConfirmClick(postpone, POSTPONE_CONFIRM_LABEL, function () {
+        postponeTask(task);
+      });
     });
   }
 
@@ -116,8 +119,9 @@ function createOverdueCard(task) {
 // Desenha o dia que a API mandou. Só as listas são esvaziadas e preenchidas: o <details> das
 // Concluídas continua o mesmo elemento, então fica aberto se estava aberto.
 function showDay(day) {
-  // Os botões antigos vão ser trocados por novos: a confirmação do Adiar, se houver, acaba aqui.
-  cancelPostponeConfirmation();
+  // Os botões antigos vão ser trocados por novos: a confirmação em dois toques, se houver, acaba
+  // aqui (também a do Excluir, se a lista recarregar com o formulário aberto).
+  cancelConfirmation();
   shownDay = day;
 
   overdueList.replaceChildren();
@@ -221,9 +225,9 @@ async function loadDay() {
 
 const SAVE_ERROR_TEXT = "Não foi possível salvar. Tente de novo.";
 
-// Enquanto uma gravação espera a resposta (caixinha, Adiar ou formulário), as caixinhas e os
-// botões Editar e Adiar ficam bloqueados (uma gravação por vez), e o formulário não abre (seção
-// 1 do task-form.js). Os botões do título continuam livres: abrir e fechar não grava nada.
+// Enquanto uma gravação espera a resposta (caixinha, Adiar, Salvar ou Excluir), as caixinhas e
+// os botões Editar e Adiar ficam bloqueados (uma gravação por vez), e o formulário não abre
+// (seção 1 do task-form.js). Os botões do título continuam livres: abrir e fechar não grava nada.
 let saving = false;
 
 function disableTaskControls() {
@@ -300,7 +304,7 @@ let openTaskId = null;
 // Abre o cartão tocado e fecha o que estava aberto. Tocar no cartão aberto só fecha. Não
 // desenha a lista de novo, então o foco continua no botão tocado.
 function toggleCard(taskId) {
-  cancelPostponeConfirmation();
+  cancelConfirmation();
   const previousTaskId = openTaskId;
   if (previousTaskId !== null) {
     setCardOpen(previousTaskId, false);
@@ -323,9 +327,9 @@ function setCardOpen(taskId, open) {
   card.querySelector(".task-details").hidden = !open;
 }
 
-// Fecha o cartão aberto, se houver, e cancela a confirmação do Adiar. Usada ao mudar de dia.
+// Fecha o cartão aberto, se houver, e cancela a confirmação em dois toques. Usada ao mudar de dia.
 function closeOpenCard() {
-  cancelPostponeConfirmation();
+  cancelConfirmation();
   if (openTaskId !== null) {
     setCardOpen(openTaskId, false);
     openTaskId = null;
@@ -343,64 +347,70 @@ function focusCardToggle(taskId) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// 5. Adiar, com confirmação
+// 5. Confirmação em dois toques (Adiar e Excluir) e o Adiar
 // ---------------------------------------------------------------------------------------------
 
-// Os textos do botão. O "−25% XP" é fixo: cada adiamento tira 25% (seção 4.2), e a tela não faz conta.
-const POSTPONE_LABEL = "Adiar";
-const POSTPONE_CONFIRM_LABEL = "Confirmar adiar (−25% XP)";
-const LAST_DATE_TEXT = "Esta tarefa já está na última data possível e não pode ser adiada.";
-
 // Quanto tempo a confirmação espera antes de voltar ao normal, e quanto tempo ela ignora o toque,
-// para um toque duplo no "Adiar" não confirmar sozinho.
-const POSTPONE_CONFIRM_TIMEOUT_MS = 5000;
+// para um toque duplo não confirmar sozinho. Vale para o Adiar e para o Excluir do formulário
+// (task-form.js), e o meio segundo também para a confirmação da data nova.
+const CONFIRM_TIMEOUT_MS = 5000;
 const DOUBLE_TAP_GUARD_MS = 500;
 
-// O botão que está pedindo confirmação, ou null.
+// O botão que está pedindo confirmação, ou null, e o texto que ele tinha antes, para voltar a ele.
 let confirmButton = null;
+let confirmButtonLabel = "";
 // Falso no primeiro meio segundo da confirmação: o segundo toque de um toque duplo não vale.
 let confirmReady = false;
 // Os números que o setTimeout devolve, para o clearTimeout desistir deles.
 let confirmTimer = null;
 let readyTimer = null;
 
-// Primeiro toque: pede confirmação. Segundo toque no mesmo botão, depois do meio segundo: adia.
-function handlePostponeClick(task, button) {
+// Primeiro toque: pede confirmação, com o texto confirmLabel no botão. Segundo toque no mesmo
+// botão, depois do meio segundo: desfaz a confirmação e faz a ação. action é uma função, que esta
+// aqui chama só na hora certa: o Adiar entrega uma que adia a tarefa do cartão, e o Excluir
+// entrega deleteTask.
+function handleConfirmClick(button, confirmLabel, action) {
   if (confirmButton !== button) {
-    startPostponeConfirmation(button);
+    startConfirmation(button, confirmLabel);
     return;
   }
   if (!confirmReady) {
     return;
   }
-  cancelPostponeConfirmation();
-  postponeTask(task);
+  cancelConfirmation();
+  action();
 }
 
-function startPostponeConfirmation(button) {
-  cancelPostponeConfirmation();
+function startConfirmation(button, confirmLabel) {
+  cancelConfirmation();
   confirmButton = button;
+  confirmButtonLabel = button.textContent;
   confirmReady = false;
-  button.textContent = POSTPONE_CONFIRM_LABEL;
+  button.textContent = confirmLabel;
   button.classList.add("is-confirming");
   readyTimer = setTimeout(function () {
     confirmReady = true;
   }, DOUBLE_TAP_GUARD_MS);
-  confirmTimer = setTimeout(cancelPostponeConfirmation, POSTPONE_CONFIRM_TIMEOUT_MS);
+  confirmTimer = setTimeout(cancelConfirmation, CONFIRM_TIMEOUT_MS);
 }
 
-// Volta o botão ao normal. Chamada pelo tempo, por um toque em outra coisa (no app.js), ao abrir
-// ou fechar um cartão, ao mudar de dia e ao desenhar a lista de novo. Sem confirmação em
-// andamento, não faz nada.
-function cancelPostponeConfirmation() {
+// Volta o botão ao texto de antes. Chamada pelo tempo, por um toque em outra coisa (no app.js),
+// ao abrir ou fechar um cartão, ao mudar de dia, ao desenhar a lista de novo e, no formulário, ao
+// mexer num campo, ao abrir e ao fechar. Sem confirmação em andamento, não faz nada.
+function cancelConfirmation() {
   clearTimeout(readyTimer);
   clearTimeout(confirmTimer);
   if (confirmButton !== null) {
-    confirmButton.textContent = POSTPONE_LABEL;
+    confirmButton.textContent = confirmButtonLabel;
     confirmButton.classList.remove("is-confirming");
     confirmButton = null;
   }
 }
+
+// O texto da confirmação do Adiar. O "−25% XP" é fixo: cada adiamento tira 25% (seção 4.2), e a
+// tela não faz conta.
+const POSTPONE_CONFIRM_LABEL = "Confirmar adiar (−25% XP)";
+const LAST_DATE_TEXT = "Esta tarefa já está na última data possível e não pode ser adiada.";
 
 // Adia a tarefa e depois recarrega a lista e o topo. A tarefa adiada sai da lista do dia, e o
 // aviso no topo diz para onde ela foi, com a data nova da resposta do servidor, só formatada.

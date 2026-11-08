@@ -1,8 +1,9 @@
-// task-form.js: o formulário de criar e de editar tarefa. Abre o <dialog> vazio ("Nova tarefa") ou
-// preenchido com uma tarefa da lista (Editar), busca os tipos, grava pelo POST /tasks ou pelo
-// PUT /tasks/{id} e mostra os erros em português. Carrega depois do day.js. Ao carregar, só usa
-// o HTML e os nomes deste arquivo; saving, shownDay, loadDay, showNotice e companhia, dos
-// arquivos anteriores, só são usados depois de um toque.
+// task-form.js: o formulário de criar, de editar e de excluir tarefa. Abre o <dialog> vazio
+// ("Nova tarefa") ou preenchido com uma tarefa da lista (Editar), busca os tipos, grava pelo
+// POST /tasks ou pelo PUT /tasks/{id}, exclui pelo DELETE /tasks/{id}, com confirmação em dois
+// toques, e mostra os erros em português. Carrega depois do day.js. Ao carregar, só usa o HTML e
+// os nomes deste arquivo; saving, shownDay, loadDay, showNotice, cancelConfirmation e companhia,
+// dos arquivos anteriores, só são usados depois de um toque.
 
 // ---------------------------------------------------------------------------------------------
 // 1. Abrir e fechar
@@ -31,6 +32,10 @@ const formError = document.getElementById("task-form-error");
 const formConfirm = document.getElementById("task-form-confirm");
 const formCancel = document.getElementById("task-form-cancel");
 const formSave = document.getElementById("task-form-save");
+const formDeleteArea = document.getElementById("task-form-delete-area");
+const formDeletePending = document.getElementById("task-form-delete-pending");
+const formDeleteCompleted = document.getElementById("task-form-delete-completed");
+const formDelete = document.getElementById("task-form-delete");
 // O "Sem tipo" escrito no HTML. Fica guardado para a lista de tipos sempre começar por ele.
 const formNoTypeOption = formType.options[0];
 
@@ -62,6 +67,8 @@ function openTaskForm(task) {
   colorChosen = false;
   clearFormErrors();
   cancelDateConfirmation();
+  // Cada abertura começa com o "Excluir" normal, sem confirmação armada.
+  cancelConfirmation();
   if (task === null) {
     formHeading.textContent = NEW_TASK_HEADING;
     // A data sugerida vem pronta do servidor (new_task_due_date): o dia da tela ou, se ele já
@@ -73,6 +80,7 @@ function openTaskForm(task) {
     fillTaskForm(task);
   }
   showLockedFields(task);
+  showDeleteArea(task);
   loadTaskTypes(task === null ? null : task.task_type_id);
   taskFormDialog.showModal();
 }
@@ -109,6 +117,15 @@ function showLockedFields(task) {
   formDifficultyCompleted.hidden = !completed;
 }
 
+// A área do Excluir aparece só na edição, nunca no "Nova tarefa". O texto sobre o XP vem do
+// completed do servidor: a pendente (inclusive a atrasada) ou a concluída (seção 6).
+function showDeleteArea(task) {
+  const editing = task !== null;
+  formDeleteArea.hidden = !editing;
+  formDeletePending.hidden = !(editing && !task.completed);
+  formDeleteCompleted.hidden = !(editing && task.completed);
+}
+
 newTaskButton.addEventListener("click", function () {
   openTaskForm(null);
 });
@@ -132,8 +149,10 @@ taskFormDialog.addEventListener("cancel", function (event) {
 // criação, é o "Nova tarefa", que continua na página. Na edição, o Editar que abriu pode ter sido
 // trocado por um novo, se a lista foi desenhada de novo nesse meio tempo (depois de um erro, ou
 // na volta ao app). O evento "close" chega depois de o navegador devolver o foco, então o foco
-// fica onde focusEditedTask mandar.
+// fica onde focusEditedTask mandar. Fechar também desfaz a confirmação do Excluir, se houver: ela
+// vale só para esta abertura.
 taskFormDialog.addEventListener("close", function () {
+  cancelConfirmation();
   if (editingTask !== null) {
     focusEditedTask(editingTask.id);
   }
@@ -416,6 +435,7 @@ async function saveTask() {
   saving = true;
   formSave.disabled = true;
   formCancel.disabled = true;
+  formDelete.disabled = true;
   cancelDateConfirmation();
   disableTaskControls();
   hideMessages();
@@ -436,6 +456,7 @@ async function saveTask() {
   saving = false;
   formSave.disabled = false;
   formCancel.disabled = false;
+  formDelete.disabled = false;
 
   if (failure !== null) {
     if (taskFormDialog.open) {
@@ -507,3 +528,99 @@ taskForm.addEventListener("submit", function (event) {
   }
   saveTask();
 });
+
+// ---------------------------------------------------------------------------------------------
+// 6. Excluir
+// ---------------------------------------------------------------------------------------------
+
+// Os textos fixos. Excluir nunca muda o XP (seção 4.3): o texto sobre isso fica no HTML, sempre à
+// vista acima do botão, e o topo não é recarregado depois de excluir.
+const CONFIRM_DELETE_LABEL = "Confirmar exclusão";
+const DELETE_ERROR_TEXT = "Não foi possível excluir. Tente de novo.";
+
+// Primeiro toque: arma a confirmação, com o mecanismo do Adiar (seção 5 do day.js): volta sozinha
+// em 5 segundos ou num toque em qualquer outra coisa, e o segundo toque de um toque duplo não
+// vale. A confirmação da data nova é desfeita antes, para não ficarem dois botões pedindo
+// confirmação ao mesmo tempo. Segundo toque, depois do meio segundo: exclui.
+formDelete.addEventListener("click", function () {
+  cancelDateConfirmation();
+  handleConfirmClick(formDelete, CONFIRM_DELETE_LABEL, deleteTask);
+});
+
+// Mexer num campo (também pelo teclado, sem clique) desfaz a confirmação do Excluir: quem voltou a
+// editar desistiu de excluir. O evento "input" de cada campo sobe até o <form>.
+taskForm.addEventListener("input", function () {
+  cancelConfirmation();
+});
+
+// Exclui a tarefa do formulário. Segue o molde do saveTask: uma gravação por vez, tudo bloqueado
+// antes do await, sem pausa. O DELETE não leva corpo: o que foi mudado no formulário e não foi
+// salvo some junto com a tarefa. O apiRequest devolve null no 204, e aqui só importa se deu erro.
+async function deleteTask() {
+  if (saving) {
+    return;
+  }
+  // A tarefa como veio da lista, guardada numa constante até o fim.
+  const task = editingTask;
+  saving = true;
+  formSave.disabled = true;
+  formCancel.disabled = true;
+  formDelete.disabled = true;
+  cancelConfirmation();
+  cancelDateConfirmation();
+  disableTaskControls();
+  hideMessages();
+  clearFormErrors();
+
+  let failure = null;
+  try {
+    await apiRequest("tasks/" + task.id, { method: "DELETE" });
+  } catch (error) {
+    failure = error;
+  }
+
+  saving = false;
+  formSave.disabled = false;
+  formCancel.disabled = false;
+  formDelete.disabled = false;
+
+  // 404: a tarefa já tinha sido excluída em outro lugar. O que a pessoa queria já aconteceu, então
+  // segue como o sucesso, com outro aviso. Qualquer outro erro (rede caída, erro 500) não excluiu.
+  if (failure !== null && failure.status !== 404) {
+    console.error(failure);
+    if (taskFormDialog.open) {
+      // O formulário continua aberto, com o que foi digitado. O "Excluir" perdeu o foco quando
+      // foi bloqueado, e o recebe de volta para tentar de novo.
+      formError.textContent = DELETE_ERROR_TEXT;
+      formError.hidden = false;
+      formDelete.focus();
+    } else {
+      // O Chrome fechou o formulário durante a gravação (dois Esc seguidos): o erro vai para o topo.
+      showSaveMessage(DELETE_ERROR_TEXT);
+    }
+    // A lista de trás é desenhada de novo, para liberar o que disableTaskControls bloqueou.
+    loadDay();
+    return;
+  }
+
+  taskFormDialog.close();
+  await loadDay();
+  // O título é o da lista (task.title), e não o do campo: um título digitado e não salvo nunca
+  // chegou ao banco. O aviso aparece sempre, porque a tarefa sempre sai da tela.
+  if (failure === null) {
+    showNotice("Excluída: " + task.title);
+  } else {
+    showNotice("Já tinha sido excluída em outro lugar: " + task.title);
+  }
+  focusAfterDelete();
+}
+
+// O foco vai para o "Nova tarefa", que nunca é desenhado de novo. Se a lista não carregou, ele
+// está escondido e não recebe foco; então vai para o "Tentar de novo", que está na tela.
+function focusAfterDelete() {
+  if (shownDay === null) {
+    document.getElementById("day-retry").focus();
+  } else {
+    newTaskButton.focus();
+  }
+}

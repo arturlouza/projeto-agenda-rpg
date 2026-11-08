@@ -31,7 +31,8 @@
       <!-- Aviso de que a tarefa saiu da tela: adiada (com a data nova que o servidor devolveu),
            criada para outro dia, concluída olhando outro dia ou desmarcada de volta ao dia
            marcado. Fica no topo porque o cartão some da lista ou nem aparece nela. Também diz
-           para onde foi a tarefa editada com data nova, e se contou como adiamento. -->
+           para onde foi a tarefa editada com data nova, e se contou como adiamento, e qual
+           tarefa foi excluída. -->
       <p id="notice" class="player-message" role="status" hidden></p>
     </div>
   </header>
@@ -88,7 +89,7 @@
     </div>
   </main>
 
-  <!-- Formulário de criar e de editar tarefa, aberto pelo task-form.js com showModal(): fica por
+  <!-- Formulário de criar, editar e excluir tarefa, aberto pelo task-form.js com showModal(): fica por
        cima de tudo, e o resto da página não recebe toque nem foco. O Esc e o gesto de voltar do
        Android fecham. O <form> não tem method nem action: o task-form.js cancela o envio do navegador e
        grava por fetch (seção 6.7). novalidate e a falta de required e maxlength deixam as regras
@@ -162,6 +163,17 @@
       <div class="form-actions">
         <button type="button" id="task-form-cancel" class="button">Cancelar</button>
         <button type="submit" id="task-form-save" class="button is-primary">Salvar</button>
+      </div>
+
+      <!-- Excluir: só na edição, embaixo e à esquerda, longe do Salvar, com uma linha antes. Pede
+           confirmação em dois toques, como o Adiar. O type="button" é obrigatório: um <button>
+           sem type dentro de um <form> envia o formulário, e o Excluir salvaria a edição. Um dos
+           dois textos aparece, escolhido pelo task-form.js com o completed do servidor; excluir
+           nunca muda o XP (seção 4.3). -->
+      <div id="task-form-delete-area" class="form-delete-area" hidden>
+        <p id="task-form-delete-pending" class="form-hint" hidden>Excluir apaga a tarefa de vez e não muda o seu XP.</p>
+        <p id="task-form-delete-completed" class="form-hint" hidden>Excluir apaga a tarefa de vez, mas o XP que ela deu continua no seu total. Para tirar esse XP, desmarque a tarefa antes de excluir.</p>
+        <button type="button" id="task-form-delete" class="button is-danger">Excluir</button>
       </div>
     </form>
   </dialog>

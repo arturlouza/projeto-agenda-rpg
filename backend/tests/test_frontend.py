@@ -87,14 +87,15 @@ def index_scripts():
 
 
 # Lê o formulário de tarefa (<form id="task-form">): os atributos do <form>, os campos (input,
-# select e textarea) com os atributos deles, o "for" de cada <label> e os valores das opções da
-# dificuldade.
+# select e textarea) com os atributos deles, os botões, o "for" de cada <label> e os valores das
+# opções da dificuldade.
 class TaskFormFinder(HTMLParser):
     def __init__(self):
         super().__init__()
         self.form = None
         self.inside_form = False
         self.fields = []
+        self.buttons = []
         self.label_targets = []
         self.difficulty_options = []
         self.current_select = None
@@ -108,6 +109,8 @@ class TaskFormFinder(HTMLParser):
             return
         if tag in ("input", "select", "textarea"):
             self.fields.append(attributes)
+        if tag == "button":
+            self.buttons.append(attributes)
         if tag == "select":
             self.current_select = attributes.get("name")
         if tag == "label":
@@ -371,6 +374,18 @@ def test_task_form_fields_match_the_edit_api():
 
     assert set(TaskUpdate.model_fields) == form_names | {"shown_due_date"}
     assert "shown_due_date" not in form_names
+
+
+# Dentro de um <form>, um <button> sem type envia o formulário. Um Excluir sem type salvaria a
+# edição em vez de excluir. Por isso todo botão do formulário tem o type escrito, e o único que
+# envia é o Salvar.
+def test_only_save_submits_the_task_form():
+    buttons = task_form().buttons
+
+    for button in buttons:
+        assert button.get("type") in ("button", "submit"), button
+    assert [button["id"] for button in buttons if button["type"] == "submit"] == ["task-form-save"]
+    assert "task-form-delete" in [button["id"] for button in buttons]
 
 
 # As regras ficam só no servidor (tasks.py): o HTML não leva nenhum limite que o navegador
