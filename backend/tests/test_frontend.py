@@ -6,7 +6,7 @@ from typing import get_args
 import pytest
 
 from app.models import DEFAULT_TASK_COLOR
-from app.routers.tasks import Difficulty, TaskInput
+from app.routers.tasks import Difficulty, TaskInput, TaskUpdate
 
 # As pastas são achadas a partir deste arquivo: tests/ está em backend/, que está na raiz.
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -361,6 +361,16 @@ def test_task_form_fields_match_the_api():
     assert sorted(field["name"] for field in form.fields) == sorted(TaskInput.model_fields)
     for field in form.fields:
         assert field["id"] in form.label_targets, field
+
+
+# A edição manda os mesmos campos do formulário e mais shown_due_date, a data que o formulário
+# mostrou ao abrir, que sai da lista, e não de um campo. Se a API passar a exigir outro campo na
+# edição, toda edição pela tela daria 422, e este teste falha antes.
+def test_task_form_fields_match_the_edit_api():
+    form_names = {field["name"] for field in task_form().fields}
+
+    assert set(TaskUpdate.model_fields) == form_names | {"shown_due_date"}
+    assert "shown_due_date" not in form_names
 
 
 # As regras ficam só no servidor (tasks.py): o HTML não leva nenhum limite que o navegador

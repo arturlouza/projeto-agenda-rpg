@@ -30,7 +30,8 @@
       <p id="save-message" class="player-message is-error" role="status" hidden></p>
       <!-- Aviso de que a tarefa saiu da tela: adiada (com a data nova que o servidor devolveu),
            criada para outro dia, concluída olhando outro dia ou desmarcada de volta ao dia
-           marcado. Fica no topo porque o cartão some da lista ou nem aparece nela. -->
+           marcado. Fica no topo porque o cartão some da lista ou nem aparece nela. Também diz
+           para onde foi a tarefa editada com data nova, e se contou como adiamento. -->
       <p id="notice" class="player-message" role="status" hidden></p>
     </div>
   </header>
@@ -87,15 +88,16 @@
     </div>
   </main>
 
-  <!-- Formulário de tarefa nova, aberto pelo task-form.js com showModal(): fica por cima de
-       tudo, e o resto da página não recebe toque nem foco. O Esc e o gesto de voltar do Android
-       fecham. O <form> não tem method nem action: o task-form.js cancela o envio do navegador e
+  <!-- Formulário de criar e de editar tarefa, aberto pelo task-form.js com showModal(): fica por
+       cima de tudo, e o resto da página não recebe toque nem foco. O Esc e o gesto de voltar do
+       Android fecham. O <form> não tem method nem action: o task-form.js cancela o envio do navegador e
        grava por fetch (seção 6.7). novalidate e a falta de required e maxlength deixam as regras
        só no servidor, em tasks.py. Cada name é o nome do campo na API, para a tela achar o campo
        que o erro 422 aponta. O value da cor é a cor padrão do servidor (DEFAULT_TASK_COLOR, em
        models.py); um teste confere que os dois são iguais. -->
   <dialog id="task-form-dialog" class="form-dialog" aria-labelledby="task-form-heading">
     <form id="task-form" novalidate>
+      <!-- "Nova tarefa" ou "Editar tarefa", escrito pelo task-form.js ao abrir. -->
       <h2 id="task-form-heading" class="section-title">Nova tarefa</h2>
 
       <div class="form-field">
@@ -103,9 +105,14 @@
         <input type="text" id="task-form-title" name="title" autocomplete="off" autofocus>
       </div>
 
+      <!-- Os textos embaixo da Data e da Dificuldade só aparecem na edição, um de cada vez,
+           escolhidos pelo task-form.js com o que veio do servidor (completed e due_date_locked). -->
       <div class="form-field">
         <label for="task-form-due-date">Data</label>
         <input type="date" id="task-form-due-date" name="due_date">
+        <p id="task-form-date-postpone" class="form-hint" hidden>Mudar a data para depois conta como adiamento: −25% XP. Antecipar não conta.</p>
+        <p id="task-form-date-locked" class="form-hint" hidden>Data travada: esta tarefa chegou ao limite de adiamentos.</p>
+        <p id="task-form-date-completed" class="form-hint" hidden>Tarefa concluída: desmarque para mudar a data.</p>
       </div>
 
       <div class="form-field">
@@ -115,6 +122,7 @@
           <option value="medium">Médio</option>
           <option value="hard">Difícil</option>
         </select>
+        <p id="task-form-difficulty-completed" class="form-hint" hidden>Tarefa concluída: desmarque para mudar a dificuldade.</p>
       </div>
 
       <div class="form-field">
@@ -131,7 +139,12 @@
         <select id="task-form-type" name="task_type_id">
           <option value="">Sem tipo</option>
         </select>
+        <!-- O primeiro aviso é o da criação, o segundo o da edição: na edição, o tipo da tarefa
+             fica escolhido mesmo sem a lista. O terceiro aparece quando o tipo da tarefa foi
+             excluído. -->
         <p id="task-form-types-error" class="form-hint is-error" hidden>Não foi possível carregar os tipos. Dá para salvar sem tipo.</p>
+        <p id="task-form-types-kept" class="form-hint is-error" hidden>Não foi possível carregar os tipos. Ao salvar, a tarefa continua com o tipo que já tem.</p>
+        <p id="task-form-type-gone" class="form-hint" hidden>O tipo desta tarefa não existe mais.</p>
       </div>
 
       <div class="form-field">
@@ -141,6 +154,10 @@
 
       <!-- Erro ao salvar. Fica dentro do formulário porque o topo está atrás do fundo escuro. -->
       <p id="task-form-error" class="form-error" role="alert" hidden></p>
+
+      <!-- Pedido de confirmação quando a data mudou na edição. A tela não sabe se a data nova é
+           depois ou antes da marcada: quem decide se conta como adiamento é o servidor. -->
+      <p id="task-form-confirm" class="form-confirm" role="alert" hidden>A data mudou. Se a nova data for depois da marcada, conta como adiamento e a tarefa perde 25% do XP. Toque em "Confirmar nova data" para salvar.</p>
 
       <div class="form-actions">
         <button type="button" id="task-form-cancel" class="button">Cancelar</button>
@@ -152,7 +169,8 @@
   <!-- Modelo do cartão de uma tarefa. O navegador não mostra o que está num <template>: o day.js
        copia este modelo para cada tarefa e preenche os textos. No <label>, a caixinha de
        concluir; o texto escondido da vista dá a ela o nome da tarefa para o leitor de tela.
-       O botão do título abre e fecha a parte de baixo (.task-details), com as notas e o Adiar. -->
+       O botão do título abre e fecha a parte de baixo (.task-details), com as notas, o Editar e
+       o Adiar. -->
   <template id="task-card-template">
     <li class="task-card">
       <label class="task-check">
@@ -168,11 +186,11 @@
         </button>
         <div class="task-details" hidden>
           <p class="task-notes" hidden></p>
-          <p class="task-no-notes" hidden>Sem notas.</p>
-          <div class="task-postpone-area">
+          <div class="task-actions">
+            <button type="button" class="button task-edit">Editar</button>
             <button type="button" class="button task-postpone">Adiar</button>
-            <p class="task-postpone-locked" hidden>Data travada: esta tarefa chegou ao limite de adiamentos.</p>
           </div>
+          <p class="task-postpone-locked" hidden>Data travada: esta tarefa chegou ao limite de adiamentos.</p>
         </div>
       </div>
     </li>

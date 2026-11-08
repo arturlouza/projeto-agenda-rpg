@@ -1,6 +1,7 @@
 // day.js: a lista do dia. Desenha e busca o dia, conclui e desmarca pela caixinha, abre o
 // cartão, adia com confirmação e navega entre os dias. Carrega depois do api.js e do
-// top-bar.js. Chama refreshScreen, do app.js, só depois de um toque, com tudo já carregado.
+// top-bar.js. Chama refreshScreen, do app.js, e openTaskForm, do task-form.js, só depois de um
+// toque, com tudo já carregado.
 
 // ---------------------------------------------------------------------------------------------
 // 1. Lista do dia: desenhar
@@ -73,16 +74,23 @@ function createTaskCard(task) {
     notes.hidden = false;
   }
 
+  // O Editar abre o formulário preenchido com esta tarefa, como veio da lista. Uma gravação por
+  // vez: enquanto outra espera a resposta, ele fica bloqueado, como a caixinha e o Adiar.
+  const edit = card.querySelector(".task-edit");
+  edit.disabled = saving;
+  edit.addEventListener("click", function () {
+    openTaskForm(task);
+  });
+
   if (task.completed) {
     card.classList.add("is-completed");
     const xp = card.querySelector(".task-xp");
     xp.textContent = "+" + numberFormat.format(task.xp_earned) + " XP";
     xp.hidden = false;
 
-    // A concluída não tem Adiar (seção 6.2). Sem notas, o cartão aberto diz isso, para não
-    // abrir vazio até o Editar da tarefa 11.
-    card.querySelector(".task-postpone-area").hidden = true;
-    card.querySelector(".task-no-notes").hidden = task.notes !== null;
+    // A concluída não tem Adiar (seção 6.2): o cartão aberto mostra as notas, se houver, e o
+    // Editar.
+    card.querySelector(".task-postpone").hidden = true;
   } else {
     // A trava vem pronta do servidor (due_date_locked): a tela não conta adiamentos.
     const postpone = card.querySelector(".task-postpone");
@@ -214,12 +222,12 @@ async function loadDay() {
 const SAVE_ERROR_TEXT = "Não foi possível salvar. Tente de novo.";
 
 // Enquanto uma gravação espera a resposta (caixinha, Adiar ou formulário), as caixinhas e os
-// botões Adiar ficam bloqueados (uma gravação por vez). Os botões do título continuam livres:
-// abrir e fechar não grava nada.
+// botões Editar e Adiar ficam bloqueados (uma gravação por vez), e o formulário não abre (seção
+// 1 do task-form.js). Os botões do título continuam livres: abrir e fechar não grava nada.
 let saving = false;
 
 function disableTaskControls() {
-  for (const control of document.querySelectorAll(".task-checkbox, .task-postpone")) {
+  for (const control of document.querySelectorAll(".task-checkbox, .task-edit, .task-postpone")) {
     control.disabled = true;
   }
 }

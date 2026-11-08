@@ -301,7 +301,8 @@ body {
   overflow-wrap: anywhere;
 }
 
-/* A parte que abre: notas e Adiar, com espaço embaixo para o botão não encostar na borda. */
+/* A parte que abre: notas, Editar e Adiar, com espaço embaixo para os botões não encostarem na
+   borda. */
 .task-details {
   padding-bottom: var(--space-3);
 }
@@ -313,15 +314,18 @@ body {
   overflow-wrap: anywhere;
 }
 
-.task-no-notes,
-.task-postpone-locked {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: 14px;
+/* Editar e Adiar lado a lado. flex-wrap deixa o "Confirmar adiar (−25% XP)" descer de linha numa
+   tela estreita, em vez de criar rolagem para o lado. */
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .task-postpone-locked {
-  margin-top: var(--space-1);
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-muted);
+  font-size: 14px;
 }
 
 .task-notes-icon {
@@ -422,6 +426,15 @@ body {
   resize: vertical;
 }
 
+/* Campo bloqueado: a data travada, a data e a dificuldade da concluída e o tipo enquanto os tipos
+   carregam. A regra de cima pinta o fundo e o texto e cobriria o cinza que o navegador usa no
+   campo bloqueado; sem esta, ele pareceria livre. */
+.form-field :disabled {
+  background: var(--color-background);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
 /* O campo que o erro 422 apontou: a borda na cor de erro. */
 .form-field [aria-invalid="true"] {
   border: 2px solid var(--color-error);
@@ -441,10 +454,12 @@ body {
   cursor: pointer;
 }
 
-/* Textos embaixo de um campo (o erro ao carregar os tipos) e o erro ao salvar. overflow-wrap:
-   anywhere quebra um texto longo sem espaços em vez de empurrar a tela para o lado. */
+/* Textos embaixo de um campo (o erro ao carregar os tipos, a trava, o aviso do adiamento), o erro
+   ao salvar e o pedido de confirmação da data. overflow-wrap: anywhere quebra um texto longo sem
+   espaços em vez de empurrar a tela para o lado. */
 .form-hint,
-.form-error {
+.form-error,
+.form-confirm {
   margin: var(--space-1) 0 0;
   overflow-wrap: anywhere;
 }
@@ -454,8 +469,15 @@ body {
   color: var(--color-error);
 }
 
-.form-error {
+.form-error,
+.form-confirm {
   margin: 0 0 var(--space-3);
+}
+
+/* A confirmação da data nova, na mesma cor de aviso do botão (.is-confirming). Sobre o branco, o
+   contraste é de 4,7 para 1. */
+.form-confirm {
+  color: var(--color-warning);
 }
 
 /* Cancelar e Salvar à direita, com o Salvar por último, perto do polegar. */
