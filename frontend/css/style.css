@@ -441,9 +441,9 @@ body {
   resize: vertical;
 }
 
-/* Campo bloqueado: a data travada, a data e a dificuldade da concluída e o tipo enquanto os tipos
-   carregam. A regra de cima pinta o fundo e o texto e cobriria o cinza que o navegador usa no
-   campo bloqueado; sem esta, ele pareceria livre. */
+/* Campo bloqueado: a data travada, a data e a dificuldade da concluída e o tipo e o "Novo tipo"
+   enquanto os tipos carregam. A regra de cima pinta o fundo e o texto e cobriria o cinza que o
+   navegador usa no campo bloqueado; sem esta, ele pareceria livre. */
 .form-field :disabled {
   background: var(--color-background);
   color: var(--color-text-muted);
@@ -467,6 +467,37 @@ body {
   height: var(--touch-size);
   padding: var(--space-1);
   cursor: pointer;
+}
+
+/* O Tipo e o "Novo tipo" lado a lado. O <select> ocupa o que sobra; min-width: 0 deixa ele
+   encolher, em vez de empurrar o botão para fora da tela. Um nome longo fica cortado no <select>
+   fechado; a lista, ao abrir, mostra o nome inteiro. */
+.form-type-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.form-field .form-type-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.form-type-row .button {
+  flex-shrink: 0;
+}
+
+/* A área de criar tipo: uma borda fina em volta, para o Desistir e o Criar tipo não parecerem a
+   linha Cancelar/Salvar da tarefa. */
+.form-new-type {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.form-new-type .form-actions {
+  margin-top: var(--space-2);
 }
 
 /* Textos embaixo de um campo (o erro ao carregar os tipos, a trava, o aviso do adiamento), o erro

@@ -1,9 +1,10 @@
 // task-form.js: o formulário de criar, de editar e de excluir tarefa. Abre o <dialog> vazio
 // ("Nova tarefa") ou preenchido com uma tarefa da lista (Editar), busca os tipos, grava pelo
 // POST /tasks ou pelo PUT /tasks/{id}, exclui pelo DELETE /tasks/{id}, com confirmação em dois
-// toques, e mostra os erros em português. Carrega depois do day.js. Ao carregar, só usa o HTML e
-// os nomes deste arquivo; saving, shownDay, loadDay, showNotice, cancelConfirmation e companhia,
-// dos arquivos anteriores, só são usados depois de um toque.
+// toques, cria tipo pelo POST /task-types ("Novo tipo") e mostra os erros em português. Carrega
+// depois do day.js. Ao carregar, só usa o HTML e os nomes deste arquivo; saving, shownDay,
+// loadDay, showNotice, cancelConfirmation e companhia, dos arquivos anteriores, só são usados
+// depois de um toque.
 
 // ---------------------------------------------------------------------------------------------
 // 1. Abrir e fechar
@@ -27,6 +28,12 @@ const formType = document.getElementById("task-form-type");
 const formTypesError = document.getElementById("task-form-types-error");
 const formTypesKept = document.getElementById("task-form-types-kept");
 const formTypeGone = document.getElementById("task-form-type-gone");
+const formNewType = document.getElementById("task-form-new-type");
+const formNewTypeArea = document.getElementById("task-form-new-type-area");
+const formNewTypeName = document.getElementById("task-form-new-type-name");
+const formNewTypeError = document.getElementById("task-form-new-type-error");
+const formNewTypeCancel = document.getElementById("task-form-new-type-cancel");
+const formNewTypeCreate = document.getElementById("task-form-new-type-create");
 const formNotes = document.getElementById("task-form-notes");
 const formError = document.getElementById("task-form-error");
 const formConfirm = document.getElementById("task-form-confirm");
@@ -69,6 +76,8 @@ function openTaskForm(task) {
   cancelDateConfirmation();
   // Cada abertura começa com o "Excluir" normal, sem confirmação armada.
   cancelConfirmation();
+  // E com a área do tipo novo fechada e vazia (seção 7).
+  hideNewTypeArea();
   if (task === null) {
     formHeading.textContent = NEW_TASK_HEADING;
     // A data sugerida vem pronta do servidor (new_task_due_date): o dia da tela ou, se ele já
@@ -198,6 +207,10 @@ let latestTypesRequest = 0;
 // no pedido. Na edição de uma tarefa com tipo, ele nasce numa opção "Tipo atual", com o id do
 // tipo dela. Assim, salvar antes de os tipos chegarem, ou com o pedido dos tipos falhando,
 // mantém o tipo, em vez de mandar "Sem tipo" e apagá-lo.
+//
+// O "Novo tipo" fica bloqueado até o pedido mais recente chegar com sucesso, e continua
+// bloqueado se ele falhar. Assim, nunca há pedido dos tipos a caminho enquanto um tipo é criado:
+// a lista que chegasse depois apagaria o tipo novo do campo (seção 7).
 async function loadTaskTypes(currentTypeId) {
   latestTypesRequest = latestTypesRequest + 1;
   const thisRequest = latestTypesRequest;
@@ -210,6 +223,7 @@ async function loadTaskTypes(currentTypeId) {
   }
   formType.value = currentTypeId === null ? "" : String(currentTypeId);
   formType.disabled = true;
+  formNewType.disabled = true;
   formTypesError.hidden = true;
   formTypesKept.hidden = true;
   formTypeGone.hidden = true;
@@ -218,11 +232,13 @@ async function loadTaskTypes(currentTypeId) {
     if (thisRequest === latestTypesRequest) {
       showTaskTypes(types, currentTypeId);
       formType.disabled = false;
+      formNewType.disabled = false;
     }
   } catch (error) {
     if (thisRequest === latestTypesRequest) {
       // O campo continua utilizável. Na criação, só com "Sem tipo"; na edição, com o tipo da
-      // tarefa ainda escolhido, e o aviso diz isso.
+      // tarefa ainda escolhido, e o aviso diz isso. O "Novo tipo" fica bloqueado: um tipo novo
+      // numa lista que não chegou deixaria o aviso da edição errado.
       console.error(error);
       if (currentTypeId === null) {
         formTypesError.hidden = false;
@@ -330,12 +346,16 @@ function showFormErrors(error) {
   }
 }
 
+// Apaga os erros da tarefa. O laço tira o aria-invalid de todo o formulário, inclusive do campo do
+// tipo novo, então o erro do tipo também sai (seção 7): senão a mensagem dele ficaria sem a borda
+// vermelha. E assim o showFormErrors nunca acha o campo do tipo marcado ao escolher o foco.
 function clearFormErrors() {
   for (const field of taskForm.querySelectorAll("[aria-invalid]")) {
     field.removeAttribute("aria-invalid");
   }
   formError.textContent = "";
   formError.hidden = true;
+  clearNewTypeError();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -436,6 +456,7 @@ async function saveTask() {
   formSave.disabled = true;
   formCancel.disabled = true;
   formDelete.disabled = true;
+  formNewTypeCreate.disabled = true;
   cancelDateConfirmation();
   disableTaskControls();
   hideMessages();
@@ -457,6 +478,7 @@ async function saveTask() {
   formSave.disabled = false;
   formCancel.disabled = false;
   formDelete.disabled = false;
+  formNewTypeCreate.disabled = false;
 
   if (failure !== null) {
     if (taskFormDialog.open) {
@@ -517,6 +539,15 @@ function showEditedNotice(before, saved) {
 // (seção 4), e o segundo, no primeiro meio segundo, é ignorado.
 taskForm.addEventListener("submit", function (event) {
   event.preventDefault();
+  // Segunda barreira do Enter no campo do tipo novo (a primeira é o keydown, na seção 7). Se o
+  // Enter escapar dela (o teclado do Android, no meio de uma palavra sugerida, pode mandar a tecla
+  // de outro jeito), o navegador envia o formulário. No Chrome, tocar no Salvar põe o foco no
+  // Salvar; então um envio com o foco no campo do tipo novo só pode ter vindo de um Enter nele.
+  // Ele cria o tipo e nunca salva a tarefa. Vem antes de tudo, inclusive da confirmação da data.
+  if (document.activeElement === formNewTypeName) {
+    createTaskType();
+    return;
+  }
   if (dateChanged()) {
     if (!dateConfirming) {
       startDateConfirmation();
@@ -566,6 +597,7 @@ async function deleteTask() {
   formSave.disabled = true;
   formCancel.disabled = true;
   formDelete.disabled = true;
+  formNewTypeCreate.disabled = true;
   cancelConfirmation();
   cancelDateConfirmation();
   disableTaskControls();
@@ -583,6 +615,7 @@ async function deleteTask() {
   formSave.disabled = false;
   formCancel.disabled = false;
   formDelete.disabled = false;
+  formNewTypeCreate.disabled = false;
 
   // 404: a tarefa já tinha sido excluída em outro lugar. O que a pessoa queria já aconteceu, então
   // segue como o sucesso, com outro aviso. Qualquer outro erro (rede caída, erro 500) não excluiu.
@@ -624,3 +657,169 @@ function focusAfterDelete() {
     newTaskButton.focus();
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// 7. Criar tipo
+// ---------------------------------------------------------------------------------------------
+
+// O texto quando o erro ao criar tipo não é legível (rede caída, erro 500).
+const NEW_TYPE_ERROR_TEXT = "Não foi possível criar o tipo. Tente de novo.";
+
+// Abre a área do tipo novo e põe o foco no campo do nome. Se ela já está aberta, só põe o foco.
+// aria-expanded diz ao leitor de tela que a área está aberta.
+function showNewTypeArea() {
+  formNewTypeArea.hidden = false;
+  formNewType.setAttribute("aria-expanded", "true");
+  formNewTypeName.focus();
+}
+
+// Fecha a área e a deixa vazia, sem erro. Chamada ao abrir o formulário, ao Desistir e depois de
+// criar. Não mexe no foco: quem chama decide para onde ele vai.
+function hideNewTypeArea() {
+  formNewTypeArea.hidden = true;
+  formNewType.setAttribute("aria-expanded", "false");
+  formNewTypeName.value = "";
+  clearNewTypeError();
+}
+
+// Apaga o erro do tipo novo: o texto e a borda vermelha do campo do nome. Os erros da tarefa ficam.
+function clearNewTypeError() {
+  formNewTypeName.removeAttribute("aria-invalid");
+  formNewTypeError.textContent = "";
+  formNewTypeError.hidden = true;
+}
+
+// Mostra o erro ao criar tipo embaixo do campo do nome, e nunca no erro da tarefa: o showFormErrors
+// procura o campo da tarefa pelo loc, e o loc do tipo (["body", "name"]) não é campo da tarefa. O
+// que foi digitado no nome e na tarefa fica, e o foco volta ao nome.
+function showNewTypeError(error) {
+  const texts = [];
+  let unknown = false;
+
+  if (typeof error.detail === "string") {
+    // 409: já existe um tipo com esse nome, ignorando maiúsculas e minúsculas. O texto já vem em
+    // português do servidor.
+    texts.push(error.detail);
+  } else if (Array.isArray(error.detail)) {
+    // 422: a validação automática. fieldErrorText (seção 3) escreve a frase com o rótulo do campo
+    // ("Nome do tipo novo") e, no nome longo, com o número que veio do servidor (ctx.max_length).
+    for (const item of error.detail) {
+      if (item.loc[1] === "name") {
+        texts.push(fieldErrorText(formNewTypeName, item));
+      } else {
+        unknown = true;
+      }
+    }
+  }
+
+  // Sem nada legível (rede caída, erro 500): a mensagem genérica, e o erro completo no console. Com
+  // um erro sobre o nome, o campo fica com a borda vermelha.
+  if (unknown || texts.length === 0) {
+    console.error(error);
+    texts.push(NEW_TYPE_ERROR_TEXT);
+  } else {
+    formNewTypeName.setAttribute("aria-invalid", "true");
+  }
+
+  formNewTypeError.textContent = texts.join(" ");
+  formNewTypeError.hidden = false;
+  formNewTypeName.focus();
+}
+
+// Cria o tipo pelo POST /task-types e o deixa escolhido no campo Tipo. Criar é gravar: segue o
+// molde do saveTask (seção 5), com uma gravação por vez e tudo bloqueado antes do await, sem
+// pausa. Um segundo toque cai no "Criar tipo" já bloqueado, e um segundo Enter para no
+// "if (saving)".
+async function createTaskType() {
+  if (saving) {
+    return;
+  }
+  saving = true;
+  formSave.disabled = true;
+  formCancel.disabled = true;
+  formDelete.disabled = true;
+  formNewTypeCreate.disabled = true;
+  formNewTypeCancel.disabled = true;
+  // readOnly, e não disabled: o campo não aceita digitação, mas continua com o foco (e o teclado
+  // do celular aberto). Um campo disabled perderia o foco.
+  formNewTypeName.readOnly = true;
+  // Toda gravação desfaz as duas confirmações: se o Salvar estava em "Confirmar nova data", o
+  // próximo toque nele pede a confirmação de novo.
+  cancelConfirmation();
+  cancelDateConfirmation();
+  disableTaskControls();
+  hideMessages();
+  clearNewTypeError();
+
+  let created = null;
+  let failure = null;
+  try {
+    // O nome vai como está: cortar os espaços e conferir o tamanho é do servidor.
+    created = await apiRequest("task-types", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: formNewTypeName.value }),
+    });
+  } catch (error) {
+    failure = error;
+  }
+
+  saving = false;
+  formSave.disabled = false;
+  formCancel.disabled = false;
+  formDelete.disabled = false;
+  formNewTypeCreate.disabled = false;
+  formNewTypeCancel.disabled = false;
+  formNewTypeName.readOnly = false;
+  // A lista de trás é desenhada de novo, para liberar o que disableTaskControls bloqueou.
+  loadDay();
+
+  if (!taskFormDialog.open) {
+    // O Chrome fechou o formulário durante a gravação (dois Esc seguidos). A pessoa não viu o
+    // resultado, então ele vai para o topo.
+    if (failure !== null) {
+      console.error(failure);
+      showSaveMessage(NEW_TYPE_ERROR_TEXT);
+    } else {
+      showNotice("Tipo criado: " + created.name);
+    }
+    return;
+  }
+
+  if (failure !== null) {
+    showNewTypeError(failure);
+    return;
+  }
+
+  // O tipo novo entra no fim da lista, com a resposta do servidor, sem pedir a lista de novo. A API
+  // ordena pela criação, e ele é o mais novo; na próxima abertura, a lista vem de novo da API.
+  // Nenhum pedido dos tipos está a caminho aqui (seção 2), então nada apaga a escolha. O nome entra
+  // por textContent (seção 6.7).
+  const option = document.createElement("option");
+  option.value = created.id;
+  option.textContent = created.name;
+  formType.append(option);
+  formType.value = String(created.id);
+  hideNewTypeArea();
+  formType.focus();
+}
+
+formNewType.addEventListener("click", showNewTypeArea);
+
+// Desistir: fecha a área sem criar nada, e o foco volta ao "Novo tipo".
+formNewTypeCancel.addEventListener("click", function () {
+  hideNewTypeArea();
+  formNewType.focus();
+});
+
+formNewTypeCreate.addEventListener("click", createTaskType);
+
+// Primeira barreira: o Enter neste campo cria o tipo e nunca salva a tarefa. Sem o preventDefault,
+// o navegador enviaria o <form> da tarefa, como faz com o Enter no Título. A segunda barreira fica
+// no ouvinte de "submit" (seção 5).
+formNewTypeName.addEventListener("keydown", function (event) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    createTaskType();
+  }
+});

@@ -225,9 +225,9 @@ async function loadDay() {
 
 const SAVE_ERROR_TEXT = "Não foi possível salvar. Tente de novo.";
 
-// Enquanto uma gravação espera a resposta (caixinha, Adiar, Salvar ou Excluir), as caixinhas e
-// os botões Editar e Adiar ficam bloqueados (uma gravação por vez), e o formulário não abre
-// (seção 1 do task-form.js). Os botões do título continuam livres: abrir e fechar não grava nada.
+// Enquanto uma gravação espera a resposta (caixinha, Adiar, Salvar, Excluir ou Criar tipo), as
+// caixinhas e os botões Editar e Adiar ficam bloqueados (uma gravação por vez), e o formulário
+// não abre (seção 1 do task-form.js). Os botões do título continuam livres: abrir e fechar não grava nada.
 let saving = false;
 
 function disableTaskControls() {

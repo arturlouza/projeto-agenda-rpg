@@ -6,6 +6,7 @@ from typing import get_args
 import pytest
 
 from app.models import DEFAULT_TASK_COLOR
+from app.routers.task_types import MAX_TASK_TYPE_NAME_LENGTH
 from app.routers.tasks import Difficulty, TaskInput, TaskUpdate
 
 # As pastas são achadas a partir deste arquivo: tests/ está em backend/, que está na raiz.
@@ -357,11 +358,13 @@ def test_task_form_difficulties_match_the_server():
 
 # O formulário acha o campo de um erro 422 pelo name, que é o nome do campo na API, e escreve a
 # frase com o texto do <label> dele. Por isso cada campo de TaskInput está no formulário com o
-# mesmo name, e cada campo tem um <label> que aponta para ele.
+# mesmo name, e cada campo tem um <label> que aponta para ele. Só os campos com name são da
+# tarefa: o nome do tipo novo não tem (test_new_type_field_is_not_a_task_field).
 def test_task_form_fields_match_the_api():
     form = task_form()
+    names = [field["name"] for field in form.fields if "name" in field]
 
-    assert sorted(field["name"] for field in form.fields) == sorted(TaskInput.model_fields)
+    assert sorted(names) == sorted(TaskInput.model_fields)
     for field in form.fields:
         assert field["id"] in form.label_targets, field
 
@@ -370,22 +373,36 @@ def test_task_form_fields_match_the_api():
 # mostrou ao abrir, que sai da lista, e não de um campo. Se a API passar a exigir outro campo na
 # edição, toda edição pela tela daria 422, e este teste falha antes.
 def test_task_form_fields_match_the_edit_api():
-    form_names = {field["name"] for field in task_form().fields}
+    form_names = {field["name"] for field in task_form().fields if "name" in field}
 
     assert set(TaskUpdate.model_fields) == form_names | {"shown_due_date"}
     assert "shown_due_date" not in form_names
 
 
-# Dentro de um <form>, um <button> sem type envia o formulário. Um Excluir sem type salvaria a
-# edição em vez de excluir. Por isso todo botão do formulário tem o type escrito, e o único que
-# envia é o Salvar.
+# O nome do tipo novo fica dentro do <form> da tarefa, mas não é campo dela: não tem name, então
+# não entra na comparação com a API, e o erro 422 da tarefa nunca o acha. Ele é o único campo sem
+# name: um campo da tarefa esquecido sem name continua sendo pego aqui.
+def test_new_type_field_is_not_a_task_field():
+    form = task_form()
+    without_name = [field for field in form.fields if "name" not in field]
+
+    assert [field["id"] for field in without_name] == ["task-form-new-type-name"]
+    assert without_name[0].get("type") == "text"
+    assert "task-form-new-type-name" in form.label_targets
+
+
+# Dentro de um <form>, um <button> sem type envia o formulário. Um Excluir ou um Criar tipo sem
+# type salvaria a tarefa em vez de excluir ou de criar o tipo. Por isso todo botão do formulário
+# tem o type escrito, e o único que envia é o Salvar.
 def test_only_save_submits_the_task_form():
     buttons = task_form().buttons
+    ids = [button["id"] for button in buttons]
 
     for button in buttons:
         assert button.get("type") in ("button", "submit"), button
     assert [button["id"] for button in buttons if button["type"] == "submit"] == ["task-form-save"]
-    assert "task-form-delete" in [button["id"] for button in buttons]
+    assert "task-form-delete" in ids
+    assert "task-form-new-type-create" in ids
 
 
 # As regras ficam só no servidor (tasks.py): o HTML não leva nenhum limite que o navegador
@@ -400,3 +417,36 @@ def test_task_form_leaves_the_rules_to_the_server():
     for field in form.fields:
         for attribute in ["required", "minlength", "maxlength", "pattern", "min", "max"]:
             assert attribute not in field, (field, attribute)
+
+
+# O formulário traduz o erro 422 do tipo novo lendo o loc, o type e, no nome longo, o
+# ctx.max_length (showNewTypeError, no task-form.js). Se esse formato mudar, a tela cairia na
+# mensagem genérica; este teste falha antes. O número vem do servidor, nunca do JavaScript.
+@pytest.mark.parametrize(
+    ("name", "error_type"),
+    [
+        ("", "string_too_short"),
+        ("   ", "string_too_short"),
+        ("a" * (MAX_TASK_TYPE_NAME_LENGTH + 1), "string_too_long"),
+    ],
+)
+def test_type_name_errors_have_the_shape_the_form_reads(client, name, error_type):
+    response = client.post("/task-types", json={"name": name})
+
+    assert response.status_code == 422
+    [item] = response.json()["detail"]
+    assert item["loc"] == ["body", "name"]
+    assert item["type"] == error_type
+    if error_type == "string_too_long":
+        assert item["ctx"]["max_length"] == MAX_TASK_TYPE_NAME_LENGTH
+
+
+# O limite do nome do tipo fica só em task_types.py. Ele não pode aparecer, como número inteiro, em
+# nenhum .js nem no index.html: a mensagem de erro usa o ctx.max_length da resposta. Com \b, o
+# número é procurado como palavra inteira (5000 não conta como 50).
+def test_type_name_limit_is_only_on_the_server():
+    limit = re.compile(rf"\b{MAX_TASK_TYPE_NAME_LENGTH}\b")
+    paths = sorted(FRONTEND_DIR.rglob("*.js")) + [FRONTEND_DIR / "index.html"]
+
+    for path in paths:
+        assert not limit.search(path.read_text(encoding="utf-8")), path

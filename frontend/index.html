@@ -89,8 +89,8 @@
     </div>
   </main>
 
-  <!-- Formulário de criar, editar e excluir tarefa, aberto pelo task-form.js com showModal(): fica por
-       cima de tudo, e o resto da página não recebe toque nem foco. O Esc e o gesto de voltar do
+  <!-- Formulário de criar, editar e excluir tarefa, com o criar tipo dentro, aberto pelo
+       task-form.js com showModal(): fica por cima de tudo, e o resto da página não recebe toque nem foco. O Esc e o gesto de voltar do
        Android fecham. O <form> não tem method nem action: o task-form.js cancela o envio do navegador e
        grava por fetch (seção 6.7). novalidate e a falta de required e maxlength deixam as regras
        só no servidor, em tasks.py. Cada name é o nome do campo na API, para a tela achar o campo
@@ -136,16 +136,36 @@
 
       <div class="form-field">
         <label for="task-form-type">Tipo</label>
-        <!-- Os tipos entram pelo task-form.js, depois do "Sem tipo", na ordem da API. -->
-        <select id="task-form-type" name="task_type_id">
-          <option value="">Sem tipo</option>
-        </select>
+        <!-- Os tipos entram pelo task-form.js, depois do "Sem tipo", na ordem da API. O "Novo tipo"
+             abre a área de criar tipo, logo abaixo. Ele nasce bloqueado e só fica livre quando a
+             lista de tipos chega. -->
+        <div class="form-type-row">
+          <select id="task-form-type" name="task_type_id">
+            <option value="">Sem tipo</option>
+          </select>
+          <button type="button" id="task-form-new-type" class="button" aria-expanded="false" aria-controls="task-form-new-type-area" disabled>Novo tipo</button>
+        </div>
         <!-- O primeiro aviso é o da criação, o segundo o da edição: na edição, o tipo da tarefa
              fica escolhido mesmo sem a lista. O terceiro aparece quando o tipo da tarefa foi
              excluído. -->
         <p id="task-form-types-error" class="form-hint is-error" hidden>Não foi possível carregar os tipos. Dá para salvar sem tipo.</p>
         <p id="task-form-types-kept" class="form-hint is-error" hidden>Não foi possível carregar os tipos. Ao salvar, a tarefa continua com o tipo que já tem.</p>
         <p id="task-form-type-gone" class="form-hint" hidden>O tipo desta tarefa não existe mais.</p>
+        <!-- Criar tipo (POST /task-types). O campo não tem name: não é campo da tarefa e não vai
+             no pedido dela. O Enter nele cria o tipo e nunca salva a tarefa (task-form.js, seção 7).
+             Os erros do tipo aparecem só aqui, nunca no erro da tarefa. Os três botões têm
+             type="button": sem ele, qualquer um salvaria a tarefa. Sem maxlength nem required: o
+             limite do nome fica só no servidor. -->
+        <div id="task-form-new-type-area" class="form-new-type" hidden>
+          <label for="task-form-new-type-name">Nome do tipo novo</label>
+          <input type="text" id="task-form-new-type-name" autocomplete="off">
+          <p id="task-form-new-type-error" class="form-hint is-error" role="alert" hidden></p>
+          <p class="form-hint">O tipo é criado ao tocar em "Criar tipo" e continua existindo mesmo que você cancele a tarefa.</p>
+          <div class="form-actions">
+            <button type="button" id="task-form-new-type-cancel" class="button">Desistir</button>
+            <button type="button" id="task-form-new-type-create" class="button">Criar tipo</button>
+          </div>
+        </div>
       </div>
 
       <div class="form-field">
