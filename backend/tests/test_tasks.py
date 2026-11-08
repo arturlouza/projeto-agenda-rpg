@@ -123,9 +123,23 @@ def ids(tasks):
     return [task["id"] for task in tasks]
 
 
+# Pede a semana de hoje pela API, confere que deu certo e devolve o JSON da resposta.
+def this_week_tasks(client):
+    response = client.get("/tasks/this-week")
+    assert response.status_code == 200
+    return response.json()
+
+
 # Devolve só os dias da semana que têm tarefas, cada um com os ids das tarefas dele.
 def week_ids(week):
-    return {week_day["day"]: ids(week_day["tasks"]) for week_day in week if week_day["tasks"]}
+    return {
+        week_day["day"]: ids(week_day["tasks"]) for week_day in week["days"] if week_day["tasks"]
+    }
+
+
+# Devolve um campo de cada dia da semana, na ordem dos dias, como em [True, False, ...].
+def day_flags(week, field):
+    return [week_day[field] for week_day in week["days"]]
 
 
 # Confere que o pedido foi recusado com 422 e que nada foi gravado.
@@ -879,13 +893,12 @@ def test_task_view_has_every_task_field_and_two_more():
     assert set(TaskView.model_fields) == set(Task.model_fields) | {"due_date_locked", "xp_earned"}
 
 
-# Os campos da tela ficam só na lista do dia: as outras respostas continuam iguais.
+# Os campos da tela ficam só nas listas do dia e da semana: as outras respostas continuam iguais.
 def test_other_responses_do_not_have_the_screen_fields(client):
     task = create_task(client)
-    week_task = week_tasks(client, "2026-11-01")[6]["tasks"][0]
     completed = complete_task(client, task["id"])["task"]
 
-    for response_task in [task, week_task, completed]:
+    for response_task in [task, completed]:
         assert "due_date_locked" not in response_task
         assert "xp_earned" not in response_task
 
@@ -896,16 +909,25 @@ def test_today_is_not_a_task_id(client):
     assert client.delete("/tasks/today").status_code == 422
 
 
+# Hoje é 01/11, então a semana de 02/11 a 08/11 é toda futura.
 def test_week_without_tasks_returns_seven_empty_days(client):
-    assert week_tasks(client, "2026-11-04") == [
-        {"day": "2026-11-02", "tasks": []},
-        {"day": "2026-11-03", "tasks": []},
-        {"day": "2026-11-04", "tasks": []},
-        {"day": "2026-11-05", "tasks": []},
-        {"day": "2026-11-06", "tasks": []},
-        {"day": "2026-11-07", "tasks": []},
-        {"day": "2026-11-08", "tasks": []},
-    ]
+    empty_day = {"is_today": False, "is_past": False, "tasks": []}
+
+    assert week_tasks(client, "2026-11-04") == {
+        "is_current_week": False,
+        "previous_week": "2026-10-26",
+        "next_week": "2026-11-09",
+        "overdue_outside_week": 0,
+        "days": [
+            {"day": "2026-11-02"} | empty_day,
+            {"day": "2026-11-03"} | empty_day,
+            {"day": "2026-11-04"} | empty_day,
+            {"day": "2026-11-05"} | empty_day,
+            {"day": "2026-11-06"} | empty_day,
+            {"day": "2026-11-07"} | empty_day,
+            {"day": "2026-11-08"} | empty_day,
+        ],
+    }
 
 
 # Em 2026, 02/11 é uma segunda, 04/11 é uma quarta e 08/11 é um domingo.
@@ -914,7 +936,7 @@ def test_monday_wednesday_and_sunday_return_the_same_week(client):
 
     monday_week = week_tasks(client, "2026-11-02")
 
-    assert monday_week[0]["day"] == "2026-11-02"
+    assert monday_week["days"][0]["day"] == "2026-11-02"
     assert week_tasks(client, "2026-11-04") == monday_week
     assert week_tasks(client, "2026-11-08") == monday_week
 
@@ -924,7 +946,12 @@ def test_pending_task_appears_only_on_its_day_of_the_week(client):
 
     week = week_tasks(client, "2026-11-05")
 
-    assert week[3] == {"day": "2026-11-05", "tasks": [task]}
+    assert week["days"][3] == {
+        "day": "2026-11-05",
+        "is_today": False,
+        "is_past": False,
+        "tasks": [as_listed(task)],
+    }
     assert week_ids(week) == {"2026-11-05": [task["id"]]}
     assert week_ids(week_tasks(client, "2026-11-01")) == {}
     assert week_ids(week_tasks(client, "2026-11-09")) == {}
@@ -1019,7 +1046,7 @@ def test_last_week_has_five_days_and_lists_its_tasks(client, test_engine):
 
     week = week_tasks(client, "9999-12-31")
 
-    assert [week_day["day"] for week_day in week] == [
+    assert day_flags(week, "day") == [
         "9999-12-27",
         "9999-12-28",
         "9999-12-29",
@@ -1032,8 +1059,8 @@ def test_last_week_has_five_days_and_lists_its_tasks(client, test_engine):
 def test_first_week_does_not_become_error_500(client):
     week = week_tasks(client, "0001-01-01")
 
-    assert len(week) == 7
-    assert week[0]["day"] == "0001-01-01"
+    assert len(week["days"]) == 7
+    assert week["days"][0]["day"] == "0001-01-01"
 
 
 @pytest.mark.parametrize("day", ["2026-13-01", "abc"])
@@ -1041,6 +1068,154 @@ def test_week_refuses_invalid_date(client, day):
     response = client.get(f"/tasks/week/{day}")
 
     assert response.status_code == 422
+
+
+# Hoje é domingo, 01/11: a semana de hoje vai de 26/10 a 01/11, e hoje é a última coluna.
+def test_this_week_is_the_week_of_today(client, test_engine):
+    insert_task(test_engine, due_date=date(2026, 10, 28))
+    create_task(client)
+
+    week = this_week_tasks(client)
+
+    assert week == week_tasks(client, "2026-11-01")
+    assert week["is_current_week"] is True
+    assert day_flags(week, "day")[0] == "2026-10-26"
+    assert day_flags(week, "is_today") == [False] * 6 + [True]
+    assert day_flags(week, "is_past") == [True] * 6 + [False]
+
+
+# Às 01h30 UTC de 02/11 ainda é domingo, 01/11, em Brasília. O dia vira às 03h00 UTC, e com ele
+# a semana: a de hoje passa a começar em 02/11.
+@pytest.mark.parametrize(
+    "moment, first_day, expected_is_today",
+    [
+        (datetime(2026, 11, 2, 1, 30, tzinfo=timezone.utc), "2026-10-26", [False] * 6 + [True]),
+        (datetime(2026, 11, 2, 3, 0, tzinfo=timezone.utc), "2026-11-02", [True] + [False] * 6),
+    ],
+)
+def test_this_week_follows_brasilia(client, monkeypatch, moment, first_day, expected_is_today):
+    set_now(monkeypatch, moment)
+
+    week = this_week_tasks(client)
+
+    assert week["is_current_week"] is True
+    assert day_flags(week, "day")[0] == first_day
+    assert day_flags(week, "is_today") == expected_is_today
+
+
+def test_other_week_is_not_current_and_has_its_neighbors(client):
+    week = week_tasks(client, "2026-11-04")
+
+    assert week["is_current_week"] is False
+    assert week["previous_week"] == "2026-10-26"
+    assert week["next_week"] == "2026-11-09"
+    assert day_flags(week, "is_today") == [False] * 7
+    assert day_flags(week, "is_past") == [False] * 7
+
+
+def test_past_week_days_are_all_past(client):
+    week = week_tasks(client, "2026-10-20")
+
+    assert week["is_current_week"] is False
+    assert day_flags(week, "is_today") == [False] * 7
+    assert day_flags(week, "is_past") == [True] * 7
+
+
+# Nas pontas do calendário, a semana que não existe vem null, sem erro 500.
+@pytest.mark.parametrize(
+    "day, previous_week, next_week",
+    [("0001-01-01", None, "0001-01-08"), ("9999-12-31", "9999-12-20", None)],
+)
+def test_ends_of_the_calendar_have_a_null_neighbor_week(client, day, previous_week, next_week):
+    week = week_tasks(client, day)
+
+    assert week["previous_week"] == previous_week
+    assert week["next_week"] == next_week
+
+
+# A semana e o dia mostram a mesma tarefa do mesmo jeito, com a mesma trava e o mesmo XP. Cada
+# linha é um caso: os campos da tarefa, se ela é concluída hoje, o dia em que a lista do dia a
+# mostra, a coluna da semana em que ela aparece e os valores esperados. A atrasada aparece em
+# hoje na lista do dia, mas no dia marcado na semana. A concluída com 1 dia de atraso vale 18.
+@pytest.mark.parametrize(
+    "fields, complete, listed_day, week_day, expected_locked, expected_xp",
+    [
+        ({}, False, "2026-11-01", "2026-11-01", False, 0),
+        (
+            {"due_date": date(2026, 11, 5), "postponements": 3},
+            False,
+            "2026-11-05",
+            "2026-11-05",
+            True,
+            0,
+        ),
+        (
+            {"due_date": date(2026, 10, 31), "difficulty": "medium"},
+            True,
+            "2026-11-01",
+            "2026-11-01",
+            False,
+            18,
+        ),
+        ({"due_date": date(2026, 10, 29)}, False, "2026-11-01", "2026-10-29", True, 0),
+    ],
+)
+def test_week_task_is_the_same_as_in_the_day_list(
+    client, test_engine, fields, complete, listed_day, week_day, expected_locked, expected_xp
+):
+    task_id = insert_task(test_engine, **fields)
+    if complete:
+        complete_task(client, task_id)
+
+    day_task = listed_task(client, task_id, listed_day)
+    week = week_tasks(client, week_day)
+    [column] = [listed for listed in week["days"] if listed["day"] == week_day]
+
+    assert column["tasks"] == [day_task]
+    assert day_task["due_date_locked"] is expected_locked
+    assert day_task["xp_earned"] == expected_xp
+
+
+# Como em test_due_date_locked_uses_the_brasilia_day, agora pela semana: às 22h30 de 01/11 em
+# Brasília, a tarefa de 30/10 tem 2 dias de atraso; às 00h00 de 02/11, tem 3 e está travada.
+@pytest.mark.parametrize(
+    "moment, expected_locked",
+    [
+        (datetime(2026, 11, 2, 1, 30, tzinfo=timezone.utc), False),
+        (datetime(2026, 11, 2, 3, 0, tzinfo=timezone.utc), True),
+    ],
+)
+def test_week_lock_uses_the_brasilia_day(
+    client, test_engine, monkeypatch, moment, expected_locked
+):
+    task_id = insert_task(test_engine, due_date=date(2026, 10, 30))
+    set_now(monkeypatch, moment)
+
+    week = week_tasks(client, "2026-10-30")
+
+    assert week_ids(week) == {"2026-10-30": [task_id]}
+    assert week["days"][4]["tasks"][0]["due_date_locked"] is expected_locked
+
+
+# Só contam as pendentes atrasadas cuja data fica fora da semana pedida. A concluída, a de hoje e a
+# futura nunca contam. Hoje é 01/11: a semana de hoje vai de 26/10 a 01/11, a de 04/11 vai de 02/11
+# a 08/11, e a de 20/10 vai de 19/10 a 25/10.
+def test_overdue_outside_week_counts_only_late_pending_tasks_out_of_the_week(client, test_engine):
+    insert_task(test_engine, due_date=date(2026, 10, 20))
+    insert_task(test_engine, due_date=date(2026, 10, 30))
+    insert_task(test_engine, due_date=date(2026, 10, 20), **COMPLETED_FIELDS)
+    insert_task(test_engine)
+    insert_task(test_engine, due_date=date(2026, 11, 5))
+
+    assert this_week_tasks(client)["overdue_outside_week"] == 1
+    assert week_tasks(client, "2026-11-04")["overdue_outside_week"] == 2
+    assert week_tasks(client, "2026-10-20")["overdue_outside_week"] == 1
+
+
+# /tasks/{task_id} só tem PUT e DELETE, e "this-week" não é um id: a rota nova não muda isso.
+def test_this_week_is_not_a_task_id(client):
+    assert client.put("/tasks/this-week", json=update_data()).status_code == 422
+    assert client.delete("/tasks/this-week").status_code == 422
 
 
 # Confere uma garantia do banco (seção 6.6). O código do app não pode contar com isso.

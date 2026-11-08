@@ -6,6 +6,7 @@ import pytest
 from app.dates import (
     APP_TIMEZONE,
     adjacent_days,
+    adjacent_weeks,
     app_day_bounds,
     app_today,
     to_app_date,
@@ -176,3 +177,25 @@ def test_adjacent_days_of_a_common_day(day, expected):
 def test_adjacent_days_at_the_ends_of_the_calendar():
     assert adjacent_days(date.min) == (None, date(1, 1, 2))
     assert adjacent_days(date.max) == (date(9999, 12, 30), None)
+
+
+# Em 2026, 02/11 é uma segunda, 04/11 é uma quarta e 08/11 é um domingo. Os três são da mesma
+# semana, e as vizinhas começam em 26/10 e em 09/11.
+@pytest.mark.parametrize("day", [date(2026, 11, 2), date(2026, 11, 4), date(2026, 11, 8)])
+def test_adjacent_weeks_are_the_mondays_before_and_after(day):
+    assert adjacent_weeks(day) == (date(2026, 10, 26), date(2026, 11, 9))
+
+
+# Cada linha é um caso: o dia, a segunda da semana anterior e a da seguinte. A primeira semana
+# do calendário não tem anterior; a última (27/12 a 31/12/9999) não tem seguinte; e a última
+# semana completa ainda tem a seguinte, a de 5 dias.
+@pytest.mark.parametrize(
+    "day, expected",
+    [
+        (date(1, 1, 3), (None, date(1, 1, 8))),
+        (date(9999, 12, 29), (date(9999, 12, 20), None)),
+        (date(9999, 12, 26), (date(9999, 12, 13), date(9999, 12, 27))),
+    ],
+)
+def test_adjacent_weeks_at_the_ends_of_the_calendar(day, expected):
+    assert adjacent_weeks(day) == expected

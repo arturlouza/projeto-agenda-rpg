@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Path, status
 from pydantic import ConfigDict, StringConstraints, field_validator
 from sqlmodel import Session, SQLModel, and_, col, func, or_, select, update
 
-from app.dates import adjacent_days, app_day_bounds, app_today, week_days
+from app.dates import adjacent_days, adjacent_weeks, app_day_bounds, app_today, week_days
 from app.models import DEFAULT_TASK_COLOR, Task, TaskBase, TaskType, XpEntry, utc_now
 from app.routers.task_types import MAX_ID, SessionDep
 from app.rules.xp import (
@@ -120,10 +120,32 @@ class DayTasks(SQLModel):
     completed: list[TaskView]
 
 
-# Um dia da visão da semana: pendentes e concluídas ficam na mesma lista (seção 6.2).
+# Um dia da visão da semana: pendentes e concluídas ficam na mesma lista (seção 6.2), com os
+# mesmos campos da tela que a lista do dia traz em cada tarefa.
 class WeekDay(SQLModel):
     day: date
-    tasks: list[Task]
+    # Se este dia é hoje em Brasília. A tela destaca o dia sem ler o relógio do celular.
+    is_today: bool
+    # Se este dia já passou em Brasília: uma pendente dele está atrasada. É comparação de datas,
+    # então vem pronta do servidor (regra 9 do CLAUDE.md).
+    is_past: bool
+    tasks: list[TaskView]
+
+
+# O que a API devolve ao listar uma semana: se ela é a semana de hoje, as semanas vizinhas para a
+# tela navegar sem fazer conta de data, quantas atrasadas ficam fora dela e os dias, de segunda a
+# domingo. previous_week e next_week são segundas-feiras e vêm como null quando a semana não
+# existe.
+class WeekTasks(SQLModel):
+    # Se hoje, em Brasília, é um dos dias desta semana.
+    is_current_week: bool
+    previous_week: date | None
+    next_week: date | None
+    # Quantas tarefas pendentes estão atrasadas (data anterior a hoje) e têm a data fora desta
+    # semana. Elas não aparecem em nenhuma coluna, então a tela avisa que existem.
+    overdue_outside_week: int
+    # Sete dias, ou só 5 na última semana do calendário (week_days, em dates.py).
+    days: list[WeekDay]
 
 
 # O que a API devolve ao concluir ou desmarcar: a tarefa e quanto o XP total mudou.
@@ -269,6 +291,50 @@ def build_day_tasks(session: Session, day: date, today: date) -> DayTasks:
     )
 
 
+# Monta a resposta da visão da semana, com o "hoje" que quem chama leu uma vez só, como em
+# build_day_tasks. Faz uma consulta por dia, com os mesmos filtros da visão do dia. Aqui não há
+# grupo de atrasadas: a tarefa atrasada aparece no dia marcado dela, e as que têm a data fora da
+# semana só entram na contagem.
+def build_week_tasks(session: Session, day: date, today: date) -> WeekTasks:
+    days = week_days(day)
+    tasks_by_day = [
+        session.exec(
+            select(Task)
+            .where(or_(pending_on(week_day), completed_on(week_day)))
+            .order_by(Task.created_at, Task.id)
+        ).all()
+        for week_day in days
+    ]
+
+    earned = xp_earned_by_task(session, [task.id for tasks in tasks_by_day for task in tasks])
+
+    # Pendentes com data anterior a hoje e fora dos dias desta semana, contadas pelo banco.
+    overdue_outside_week = session.exec(
+        select(func.count(Task.id)).where(
+            Task.completed == False,
+            Task.due_date < today,
+            or_(Task.due_date < days[0], Task.due_date > days[-1]),
+        )
+    ).one()
+
+    previous_week, next_week = adjacent_weeks(day)
+    return WeekTasks(
+        is_current_week=today in days,
+        previous_week=previous_week,
+        next_week=next_week,
+        overdue_outside_week=overdue_outside_week,
+        days=[
+            WeekDay(
+                day=week_day,
+                is_today=week_day == today,
+                is_past=week_day < today,
+                tasks=[task_view(task, today, earned) for task in tasks],
+            )
+            for week_day, tasks in zip(days, tasks_by_day)
+        ],
+    )
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_task(task_input: TaskInput, session: SessionDep) -> Task:
     ensure_date_is_not_past(task_input.due_date)
@@ -298,25 +364,23 @@ def list_today_tasks(session: SessionDep) -> DayTasks:
     return build_day_tasks(session, today, today)
 
 
+# A semana de hoje em Brasília, no molde de /tasks/today: a tela abre a semana atual sem usar o
+# relógio do celular.
+@router.get("/this-week")
+def list_this_week_tasks(session: SessionDep) -> WeekTasks:
+    today = app_today()
+    return build_week_tasks(session, today, today)
+
+
 @router.get("/day/{day}")
 def list_tasks_by_day(day: date, session: SessionDep) -> DayTasks:
     return build_day_tasks(session, day, app_today())
 
 
-# Faz uma consulta por dia, com os mesmos filtros da visão do dia. Aqui não há atrasadas:
-# a tarefa atrasada aparece no dia marcado dela.
+# A semana de qualquer data, de segunda a domingo (build_week_tasks).
 @router.get("/week/{day}")
-def list_tasks_by_week(day: date, session: SessionDep) -> list[WeekDay]:
-    week = []
-    for week_day in week_days(day):
-        tasks = session.exec(
-            select(Task)
-            .where(or_(pending_on(week_day), completed_on(week_day)))
-            .order_by(Task.created_at, Task.id)
-        ).all()
-        week.append(WeekDay(day=week_day, tasks=tasks))
-
-    return week
+def list_tasks_by_week(day: date, session: SessionDep) -> WeekTasks:
+    return build_week_tasks(session, day, app_today())
 
 
 # O dado é conferido antes do estado da tarefa, então os 422 da data e do tipo vêm antes dos

@@ -55,3 +55,14 @@ def week_days(day: date) -> list[date]:
         days.append(days[-1] + timedelta(days=1))
 
     return days
+
+
+# Devolve a segunda-feira da semana anterior e a da semana seguinte, para a tela navegar entre
+# semanas sem fazer conta de data. A primeira semana do calendário começa em 0001-01-01, uma
+# segunda-feira, e não tem semana anterior. A última termina em 9999-12-31 e não tem seguinte.
+# Nessas pontas, a semana que não existe vem como None, em vez de OverflowError.
+def adjacent_weeks(day: date) -> tuple[date | None, date | None]:
+    days = week_days(day)
+    previous_week = None if days[0] == date.min else days[0] - timedelta(days=7)
+    next_week = None if days[-1] == date.max else days[-1] + timedelta(days=1)
+    return previous_week, next_week
