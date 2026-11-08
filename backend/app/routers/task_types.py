@@ -1,3 +1,4 @@
+import unicodedata
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
@@ -37,14 +38,32 @@ class TaskTypeInput(SQLModel):
     ]
 
 
-# Diz se outro tipo já usa este nome, ignorando maiúsculas e minúsculas. A comparação é no
-# Python porque o lower() do SQLite não converte letras acentuadas, como o Ú de MÚSICA.
-# O ignored_id deixa um tipo trocar a caixa do próprio nome sem colidir consigo mesmo.
-def name_is_taken(session: Session, name: str, ignored_id: int | None = None) -> bool:
-    for task_type in session.exec(select(TaskType)).all():
-        if task_type.id != ignored_id and task_type.name.casefold() == name.casefold():
-            return True
-    return False
+# Chave de comparação de um nome de tipo: sem diferença de maiúsculas e minúsculas e sem
+# acentos, então "Exercício", "EXERCICIO" e "exercicio" dão a mesma chave. O casefold tira a
+# caixa. O NFD separa cada letra acentuada em letra mais marca ("é" vira "e" + acento
+# combinante, "ç" vira "c" + cedilha), e as marcas saem. O casefold vem antes porque pode criar
+# uma marca nova (o "İ" turco vira "i" + ponto), e o NFD depois separa também essa. Os espaços
+# das pontas já saíram no TaskTypeInput.
+def name_key(name: str) -> str:
+    decomposed = unicodedata.normalize("NFD", name.casefold())
+    return "".join(char for char in decomposed if not unicodedata.combining(char))
+
+
+# Responde 409 se outro tipo já usa um nome com a mesma chave, citando o nome como foi gravado.
+# A comparação é no Python, igual nos dois bancos: o lower() do SQLite não mexe em letras
+# acentuadas, e tirar acentos no PostgreSQL pediria uma extensão que o SQLite não tem.
+# O ignored_id deixa um tipo trocar a caixa ou o acento do próprio nome sem colidir consigo
+# mesmo. A busca segue a ordem da lista, para a mensagem citar sempre o tipo mais antigo quando
+# dois tipos antigos tiverem a mesma chave.
+def ensure_name_is_free(session: Session, name: str, ignored_id: int | None = None) -> None:
+    key = name_key(name)
+    task_types = session.exec(select(TaskType).order_by(TaskType.created_at, TaskType.id)).all()
+    for task_type in task_types:
+        if task_type.id != ignored_id and name_key(task_type.name) == key:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=f"Já existe um tipo com esse nome: {task_type.name}.",
+            )
 
 
 # Busca o tipo pelo id e responde 404 se ele não existir.
@@ -58,11 +77,16 @@ def get_task_type_or_404(session: Session, task_type_id: int) -> TaskType:
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    responses={409: {"description": "Já existe um tipo com esse nome."}},
+    responses={
+        409: {
+            "description": (
+                "Já existe um tipo com esse nome, ignorando maiúsculas, minúsculas e acentos."
+            )
+        }
+    },
 )
 def create_task_type(task_type_input: TaskTypeInput, session: SessionDep) -> TaskType:
-    if name_is_taken(session, task_type_input.name):
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="Já existe um tipo com esse nome.")
+    ensure_name_is_free(session, task_type_input.name)
 
     task_type = TaskType(name=task_type_input.name)
     session.add(task_type)
@@ -81,7 +105,11 @@ def list_task_types(session: SessionDep) -> list[TaskType]:
     "/{task_type_id}",
     responses={
         404: {"description": "Tipo de tarefa não encontrado."},
-        409: {"description": "Já existe um tipo com esse nome."},
+        409: {
+            "description": (
+                "Já existe um tipo com esse nome, ignorando maiúsculas, minúsculas e acentos."
+            )
+        },
     },
 )
 def rename_task_type(
@@ -89,8 +117,7 @@ def rename_task_type(
 ) -> TaskType:
     task_type = get_task_type_or_404(session, task_type_id)
 
-    if name_is_taken(session, task_type_input.name, ignored_id=task_type_id):
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="Já existe um tipo com esse nome.")
+    ensure_name_is_free(session, task_type_input.name, ignored_id=task_type_id)
 
     task_type.name = task_type_input.name
     session.add(task_type)

@@ -1,5 +1,7 @@
 > Texto recuperado em 02/11/2026 da conversa gravada, porque o arquivo original foi sobrescrito na mesma sessão.
 
+> 08/11/2026: a etapa 11.6a mudou a regra dos acentos. Agora "Música" e "Musica" são o mesmo nome. Vale a seção 6.1 da especificação.
+
 # Plano: Tarefa 4 (API dos tipos de tarefa) e ajustes na especificação
 
 ## Contexto

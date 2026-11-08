@@ -4,6 +4,11 @@ import pytest
 from sqlmodel import Session
 
 from app.models import Task, TaskType
+from app.routers.task_types import name_key
+
+# "Exercício" com o "í" em duas partes: "i" e o acento agudo combinante (U+0301). O escape
+# impede que um editor junte o acento à letra sem ninguém ver.
+DECOMPOSED_EXERCICIO = "Exercício"
 
 # Campos que o pedido não pode mandar. O id e o created_at existem no tipo, mas quem os define
 # é o app.
@@ -119,15 +124,50 @@ def test_create_refuses_repeated_name(client, existing, repeated):
     response = client.post("/task-types", json={"name": repeated})
 
     assert response.status_code == 409
+    assert response.json()["detail"] == f"Já existe um tipo com esse nome: {existing}."
     assert len(client.get("/task-types").json()) == 1
 
 
-def test_names_that_differ_only_by_accent_can_coexist(client):
-    create_type(client, "Música")
+@pytest.mark.parametrize(
+    ("name", "key"),
+    [
+        ("Exercício", "exercicio"),
+        ("EXERCÍCIO", "exercicio"),
+        (DECOMPOSED_EXERCICIO, "exercicio"),
+        ("Força", "forca"),
+        ("Leitura", "leitura"),
+    ],
+)
+def test_name_key(name, key):
+    assert name_key(name) == key
 
-    response = client.post("/task-types", json={"name": "Musica"})
 
-    assert response.status_code == 201
+@pytest.mark.parametrize(
+    ("existing", "repeated"),
+    [
+        ("Exercício", "exercicio"),
+        ("Exercício", "EXERCÍCIO"),
+        ("Exercício", "Exercicio"),
+        ("Exercício", DECOMPOSED_EXERCICIO),
+        ("Força", "Forca"),
+    ],
+)
+def test_create_refuses_name_that_differs_only_by_accent(client, existing, repeated):
+    create_type(client, existing)
+
+    response = client.post("/task-types", json={"name": repeated})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == f"Já existe um tipo com esse nome: {existing}."
+    assert [task_type["name"] for task_type in client.get("/task-types").json()] == [existing]
+
+
+def test_create_accepts_different_names(client):
+    create_type(client, "Leitura")
+    create_type(client, "Escrita")
+
+    names = [task_type["name"] for task_type in client.get("/task-types").json()]
+    assert names == ["Leitura", "Escrita"]
 
 
 @pytest.mark.parametrize("extra_field", UNKNOWN_FIELDS)
@@ -166,7 +206,58 @@ def test_rename_refuses_name_of_another_type(client):
     response = client.patch(f"/task-types/{task_type_id}", json={"name": "LEITURA"})
 
     assert response.status_code == 409
+    assert response.json()["detail"] == "Já existe um tipo com esse nome: Leitura."
     assert client.get("/task-types").json()[1]["name"] == "Treino"
+
+
+def test_rename_can_change_only_the_accent_of_its_own_name(client):
+    task_type_id = create_type(client, "Exercicio")
+
+    response = client.patch(f"/task-types/{task_type_id}", json={"name": "Exercício"})
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Exercício"
+
+
+def test_rename_refuses_name_of_another_type_that_differs_only_by_accent(client):
+    create_type(client, "Exercício")
+    task_type_id = create_type(client, "Treino")
+
+    response = client.patch(f"/task-types/{task_type_id}", json={"name": "exercicio"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Já existe um tipo com esse nome: Exercício."
+    assert client.get("/task-types").json()[1]["name"] == "Treino"
+
+
+# Um par que a regra antiga aceitava, gravado direto no banco porque a API já não deixa criar.
+def insert_old_duplicates(test_engine):
+    insert_type(test_engine, 1, "Exercício", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    insert_type(test_engine, 2, "exercicio", datetime(2026, 2, 1, tzinfo=timezone.utc))
+
+
+# O ignored_id ignora o próprio tipo, mas não o outro do par: até mandar o próprio nome, sem
+# mudança, é recusado. A mensagem cita o mais antigo, e nenhum dos dois muda.
+@pytest.mark.parametrize("name", ["exercicio", "Exercicio"])
+def test_renaming_an_old_duplicate_to_the_same_key_is_refused(client, test_engine, name):
+    insert_old_duplicates(test_engine)
+
+    response = client.patch("/task-types/2", json={"name": name})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Já existe um tipo com esse nome: Exercício."
+    names = [task_type["name"] for task_type in client.get("/task-types").json()]
+    assert names == ["Exercício", "exercicio"]
+
+
+def test_renaming_an_old_duplicate_to_another_name_works(client, test_engine):
+    insert_old_duplicates(test_engine)
+
+    response = client.patch("/task-types/2", json={"name": "Corrida"})
+
+    assert response.status_code == 200
+    names = [task_type["name"] for task_type in client.get("/task-types").json()]
+    assert names == ["Exercício", "Corrida"]
 
 
 @pytest.mark.parametrize("name", ["", "   "])

@@ -697,8 +697,8 @@ function showNewTypeError(error) {
   let unknown = false;
 
   if (typeof error.detail === "string") {
-    // 409: já existe um tipo com esse nome, ignorando maiúsculas e minúsculas. O texto já vem em
-    // português do servidor.
+    // 409: já existe um tipo com esse nome, ignorando maiúsculas, minúsculas e acentos. O texto já
+    // vem em português do servidor, com o nome do tipo que já existe.
     texts.push(error.detail);
   } else if (Array.isArray(error.detail)) {
     // 422: a validação automática. fieldErrorText (seção 3) escreve a frase com o rótulo do campo
