@@ -1,9 +1,10 @@
 import unicodedata
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from pydantic import ConfigDict, StringConstraints
-from sqlmodel import Session, SQLModel, select
+from sqlmodel import Session, SQLModel, col, func, select
 
 from app.database import get_session
 from app.models import Task, TaskType
@@ -36,6 +37,28 @@ class TaskTypeInput(SQLModel):
             strip_whitespace=True, min_length=1, max_length=MAX_TASK_TYPE_NAME_LENGTH
         ),
     ]
+
+
+# O que a API devolve ao listar os tipos: o tipo e quantas tarefas o usam, pendentes e
+# concluídas. A tela de tipos mostra o número antes de excluir, sem contar nada no JavaScript.
+# Os campos do tipo são escritos de novo aqui porque herdar de um modelo com tabela (TaskType)
+# não tem suporte no SQLModel. Criar e renomear continuam devolvendo o tipo sem a contagem.
+class TaskTypeView(SQLModel):
+    id: int
+    name: str
+    created_at: datetime
+    task_count: int
+
+
+# Quantas tarefas usam cada tipo, numa consulta só: {id do tipo: quantidade}. As tarefas sem tipo
+# ficam de fora, e um tipo sem tarefas não aparece no resultado (quem lê usa 0).
+def task_count_by_type(session: Session) -> dict[int, int]:
+    rows = session.exec(
+        select(Task.task_type_id, func.count())
+        .where(col(Task.task_type_id).is_not(None))
+        .group_by(Task.task_type_id)
+    ).all()
+    return dict(rows)
 
 
 # Chave de comparação de um nome de tipo: sem diferença de maiúsculas e minúsculas e sem
@@ -95,10 +118,18 @@ def create_task_type(task_type_input: TaskTypeInput, session: SessionDep) -> Tas
     return task_type
 
 
-# A ordem de criação vem do created_at. O id só desempata, em caso de empate exato.
+# A ordem de criação vem do created_at. O id só desempata, em caso de empate exato. Cada tipo
+# vem com a contagem das tarefas dele, lida do banco a cada pedido.
 @router.get("")
-def list_task_types(session: SessionDep) -> list[TaskType]:
-    return list(session.exec(select(TaskType).order_by(TaskType.created_at, TaskType.id)).all())
+def list_task_types(session: SessionDep) -> list[TaskTypeView]:
+    task_types = session.exec(select(TaskType).order_by(TaskType.created_at, TaskType.id)).all()
+    counts = task_count_by_type(session)
+    return [
+        TaskTypeView.model_validate(
+            task_type, update={"task_count": counts.get(task_type.id, 0)}
+        )
+        for task_type in task_types
+    ]
 
 
 @router.patch(

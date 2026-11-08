@@ -56,7 +56,8 @@ let noticeTimer = null;
 // O aviso de que a tarefa saiu da tela: adiada, criada para outro dia, concluída olhando outro
 // dia ou desmarcada de volta ao dia marcado. Também a data nova de uma tarefa editada, e se ela
 // contou como adiamento, e a tarefa excluída. E o tipo criado com o formulário já fechado (dois Esc
-// durante a criação). Uma linha só, para todos; o texto novo substitui o anterior.
+// durante a criação), e o tipo renomeado ou excluído com a tela de tipos já fechada. Uma linha só,
+// para todos; o texto novo substitui o anterior.
 function showNotice(text) {
   const notice = document.getElementById("notice");
   notice.textContent = text;

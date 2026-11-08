@@ -80,6 +80,61 @@ def test_list_breaks_created_at_tie_by_id(client, test_engine):
     assert [task_type["id"] for task_type in response.json()] == [1, 2]
 
 
+# Grava uma tarefa direto no banco, com o tipo e o estado que o teste escolher.
+def insert_task(test_engine, task_type_id, completed=False):
+    with Session(test_engine) as session:
+        task = Task(
+            title="Tarefa",
+            due_date=date(2026, 1, 1),
+            difficulty="easy",
+            task_type_id=task_type_id,
+            completed=completed,
+        )
+        session.add(task)
+        session.commit()
+        return task.id
+
+
+# A contagem da tela de tipos: pendentes e concluídas contam, uma tarefa sem tipo não entra em
+# nenhuma conta, e um tipo sem tarefas mostra 0.
+def test_list_counts_the_tasks_of_each_type(client, test_engine):
+    used_id = create_type(client, "Treino")
+    unused_id = create_type(client, "Leitura")
+    insert_task(test_engine, used_id)
+    insert_task(test_engine, used_id, completed=True)
+    insert_task(test_engine, None)
+
+    response = client.get("/task-types")
+
+    counts = {task_type["id"]: task_type["task_count"] for task_type in response.json()}
+    assert counts == {used_id: 2, unused_id: 0}
+
+
+# O número é lido do banco a cada pedido: mudar o tipo de uma tarefa pela edição muda a contagem
+# dos dois tipos.
+def test_list_count_follows_the_task_type(client, test_engine):
+    first_id = create_type(client, "Treino")
+    second_id = create_type(client, "Leitura")
+    task_id = insert_task(test_engine, first_id)
+
+    response = client.put(
+        f"/tasks/{task_id}",
+        json={
+            "title": "Tarefa",
+            "notes": None,
+            "difficulty": "easy",
+            "color": "#F5E6C8",
+            "task_type_id": second_id,
+            "due_date": "2026-01-01",
+            "shown_due_date": "2026-01-01",
+        },
+    )
+
+    assert response.status_code == 200
+    counts = {task_type["id"]: task_type["task_count"] for task_type in client.get("/task-types").json()}
+    assert counts == {first_id: 0, second_id: 1}
+
+
 def test_create_removes_spaces_from_the_ends(client):
     response = client.post("/task-types", json={"name": "  Leitura  "})
 
@@ -187,7 +242,8 @@ def test_rename_changes_the_name(client):
     expected = {"id": task_type_id, "name": "Estudo", "created_at": created_at}
     assert response.status_code == 200
     assert response.json() == expected
-    assert client.get("/task-types").json() == [expected]
+    # A lista traz também a contagem das tarefas do tipo (etapa 11.7); o PATCH não traz.
+    assert client.get("/task-types").json() == [expected | {"task_count": 0}]
 
 
 def test_rename_can_change_only_the_case_of_its_own_name(client):

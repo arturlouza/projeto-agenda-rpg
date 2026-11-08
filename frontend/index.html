@@ -12,6 +12,7 @@
   <script src="js/top-bar.js" defer></script>
   <script src="js/day.js" defer></script>
   <script src="js/task-form.js" defer></script>
+  <script src="js/task-types.js" defer></script>
   <script src="js/app.js" defer></script>
 </head>
 <body>
@@ -32,7 +33,8 @@
            criada para outro dia, concluída olhando outro dia ou desmarcada de volta ao dia
            marcado. Fica no topo porque o cartão some da lista ou nem aparece nela. Também diz
            para onde foi a tarefa editada com data nova, e se contou como adiamento, e qual
-           tarefa foi excluída. -->
+           tarefa foi excluída. E o resultado de criar, renomear ou excluir tipo quando a tela
+           dele já fechou (dois Esc durante a gravação). -->
       <p id="notice" class="player-message" role="status" hidden></p>
     </div>
   </header>
@@ -87,6 +89,11 @@
         <ul id="completed-list" class="task-list"></ul>
       </details>
     </div>
+
+    <!-- Abre a tela de tipos. Fica fora do #day-view: aparece mesmo quando o dia não carrega,
+         porque a tela de tipos não depende do dia, e nunca é desenhado de novo, então o foco
+         volta para ele quando a tela fecha. -->
+    <button type="button" id="open-task-types" class="button open-types-button">Tipos de tarefa</button>
   </main>
 
   <!-- Formulário de criar, editar e excluir tarefa, com o criar tipo dentro, aberto pelo
@@ -197,6 +204,66 @@
       </div>
     </form>
   </dialog>
+
+  <!-- Tela de tipos: lista, renomeia (PATCH /task-types/{id}) e exclui (DELETE), aberta pelo
+       task-types.js com showModal(), só a partir da tela principal. Fica fora do <dialog> e do
+       <form> da tarefa: dentro do <form> da tarefa, o Enter no campo de renomear salvaria a
+       tarefa (um teste confere). O "Fechar" é o primeiro elemento que recebe foco, então o
+       showModal() põe o foco nele. As linhas entram pelo modelo #task-type-row-template. -->
+  <dialog id="task-types-dialog" class="form-dialog" aria-labelledby="task-types-heading">
+    <div class="types-header">
+      <h2 id="task-types-heading" class="section-title">Tipos de tarefa</h2>
+      <button type="button" id="task-types-close" class="button">Fechar</button>
+    </div>
+    <p class="form-hint">Para criar um tipo, use o "Novo tipo" no formulário da tarefa.</p>
+    <!-- O resultado da última gravação. Fica dentro da tela porque o topo está atrás do fundo
+         escuro. -->
+    <p id="task-types-notice" class="types-notice" role="status" hidden></p>
+    <p id="task-types-status" class="day-status" role="status">Carregando tipos…</p>
+    <div id="task-types-error" hidden>
+      <p class="day-error-text">Não foi possível carregar os tipos.</p>
+      <button type="button" id="task-types-retry" class="button">Tentar de novo</button>
+    </div>
+    <p id="task-types-empty" class="day-status" hidden>Nenhum tipo cadastrado.</p>
+    <ul id="task-types-list" class="type-list"></ul>
+  </dialog>
+
+  <!-- Modelo da linha de um tipo. A parte normal (.type-view) mostra o nome, quantas tarefas usam
+       o tipo e o "Editar". A edição (.type-editor) aparece em uma linha por vez, no lugar dela.
+       O <form> da linha existe para o Enter no campo renomear este tipo; não tem method nem
+       action, e o task-types.js grava por fetch (seção 6.7). Sem required nem maxlength: o
+       limite do nome fica só no servidor. O "Excluir" fica fora do <form>, numa área própria,
+       sozinho na linha: o "Confirmar exclusão" cresce sem tirar o botão do lugar. -->
+  <template id="task-type-row-template">
+    <li class="type-row">
+      <div class="type-view">
+        <div class="type-text">
+          <span class="type-name"></span>
+          <span class="type-count"></span>
+        </div>
+        <button type="button" class="button type-edit">Editar <span class="type-edit-name visually-hidden"></span></button>
+      </div>
+      <div class="type-editor" hidden>
+        <form class="type-rename-form" novalidate>
+          <div class="form-field">
+            <label class="type-name-label">Nome do tipo</label>
+            <input type="text" class="type-name-input" name="name" autocomplete="off">
+            <p class="type-rename-error form-hint is-error" role="alert" hidden></p>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="button type-rename-cancel">Desistir</button>
+            <button type="submit" class="button is-primary type-rename-save">Salvar nome</button>
+          </div>
+        </form>
+        <div class="form-delete-area">
+          <p class="form-hint">Excluir este tipo não apaga nenhuma tarefa: as tarefas com ele ficam sem tipo.</p>
+          <p class="type-delete-count form-hint"></p>
+          <p class="type-delete-error form-error" role="alert" hidden></p>
+          <button type="button" class="button is-danger type-delete">Excluir</button>
+        </div>
+      </div>
+    </li>
+  </template>
 
   <!-- Modelo do cartão de uma tarefa. O navegador não mostra o que está num <template>: o day.js
        copia este modelo para cada tarefa e preenche os textos. No <label>, a caixinha de

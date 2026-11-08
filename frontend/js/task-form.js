@@ -284,7 +284,7 @@ const CHANGED_TASK_TEXT =
 const DELETED_TASK_TEXT = "Ela foi excluída em outro lugar.";
 
 // A frase de um erro da validação automática, com o rótulo do campo que deu o erro. Os números
-// vêm do servidor (ctx.max_length), nunca daqui.
+// vêm do servidor (ctx.max_length), nunca daqui. A tela de tipos (task-types.js) também usa.
 function fieldErrorText(field, item) {
   const label = field.labels[0].textContent;
   if (item.type === "string_too_short") {
@@ -565,7 +565,8 @@ taskForm.addEventListener("submit", function (event) {
 // ---------------------------------------------------------------------------------------------
 
 // Os textos fixos. Excluir nunca muda o XP (seção 4.3): o texto sobre isso fica no HTML, sempre à
-// vista acima do botão, e o topo não é recarregado depois de excluir.
+// vista acima do botão, e o topo não é recarregado depois de excluir. O Excluir da tela de tipos
+// (task-types.js) usa o mesmo CONFIRM_DELETE_LABEL.
 const CONFIRM_DELETE_LABEL = "Confirmar exclusão";
 const DELETE_ERROR_TEXT = "Não foi possível excluir. Tente de novo.";
 

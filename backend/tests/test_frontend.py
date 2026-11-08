@@ -134,6 +134,66 @@ def task_form():
     return finder
 
 
+# Lê todos os <form> do index.html, inclusive o que está dentro do <template> da linha de tipo: os
+# atributos de cada um, os campos e os botões dele. Anota em "misplaced" o que está no lugar
+# errado: um <form> dentro de outro, ou a tela de tipos (o <dialog> e o modelo da linha) dentro do
+# <dialog> do formulário de tarefa, onde o Enter no campo de renomear salvaria a tarefa. Os
+# <dialog> do index.html não ficam um dentro do outro, então o fim de qualquer <dialog> encerra o
+# do formulário.
+class FormsFinder(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.forms = []
+        self.ids = []
+        self.misplaced = []
+        self.current_form = None
+        self.inside_task_dialog = False
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        element_id = attributes.get("id")
+        if element_id is not None:
+            self.ids.append(element_id)
+        if tag == "dialog" and element_id == "task-form-dialog":
+            self.inside_task_dialog = True
+        if self.inside_task_dialog and element_id in ("task-types-dialog", "task-type-row-template"):
+            self.misplaced.append(f"#{element_id} dentro do formulário de tarefa")
+        if tag == "form":
+            if self.current_form is not None:
+                self.misplaced.append("<form> dentro de outro <form>")
+            self.current_form = {"attributes": attributes, "fields": [], "buttons": []}
+            self.forms.append(self.current_form)
+        elif self.current_form is not None:
+            if tag in ("input", "select", "textarea"):
+                self.current_form["fields"].append(attributes)
+            if tag == "button":
+                self.current_form["buttons"].append(attributes)
+
+    def handle_endtag(self, tag):
+        if tag == "form":
+            self.current_form = None
+        if tag == "dialog":
+            self.inside_task_dialog = False
+
+
+def html_forms():
+    finder = FormsFinder()
+    finder.feed((FRONTEND_DIR / "index.html").read_text(encoding="utf-8"))
+    finder.close()
+    return finder
+
+
+# O <form> de renomear tipo, que fica no modelo da linha da tela de tipos.
+def rename_form():
+    forms = [
+        form
+        for form in html_forms().forms
+        if "type-rename-form" in form["attributes"].get("class", "").split()
+    ]
+    assert len(forms) == 1, forms
+    return forms[0]
+
+
 def test_main_page_opens_with_the_csp(client):
     response = client.get("/")
 
@@ -450,3 +510,69 @@ def test_type_name_limit_is_only_on_the_server():
 
     for path in paths:
         assert not limit.search(path.read_text(encoding="utf-8")), path
+
+
+# A tela de tipos traduz o erro 422 de renomear do mesmo jeito que o formulário traduz o de criar
+# (showRenameError, no task-types.js): pelo loc, pelo type e, no nome longo, pelo ctx.max_length.
+# Se o formato do PATCH mudar, a tela cairia na mensagem genérica; este teste falha antes.
+@pytest.mark.parametrize(
+    ("name", "error_type"),
+    [
+        ("", "string_too_short"),
+        ("   ", "string_too_short"),
+        ("a" * (MAX_TASK_TYPE_NAME_LENGTH + 1), "string_too_long"),
+    ],
+)
+def test_type_rename_errors_have_the_shape_the_screen_reads(client, name, error_type):
+    task_type_id = client.post("/task-types", json={"name": "Leitura"}).json()["id"]
+
+    response = client.patch(f"/task-types/{task_type_id}", json={"name": name})
+
+    assert response.status_code == 422
+    [item] = response.json()["detail"]
+    assert item["loc"] == ["body", "name"]
+    assert item["type"] == error_type
+    if error_type == "string_too_long":
+        assert item["ctx"]["max_length"] == MAX_TASK_TYPE_NAME_LENGTH
+
+
+# Vale para todo <form> da página, o da tarefa e o de renomear tipo: as regras ficam só no
+# servidor (novalidate e nenhum limite nos campos), e sem method e sem action o <form> só serve
+# para o Enter enviar; a gravação é por fetch (seção 6.7).
+def test_every_form_leaves_the_rules_to_the_server():
+    forms = html_forms().forms
+    names = [form["attributes"].get("id") or form["attributes"].get("class") for form in forms]
+
+    assert names == ["task-form", "type-rename-form"]
+    for form in forms:
+        assert "novalidate" in form["attributes"], form["attributes"]
+        assert "method" not in form["attributes"], form["attributes"]
+        assert "action" not in form["attributes"], form["attributes"]
+        for field in form["fields"]:
+            for attribute in ["required", "minlength", "maxlength", "pattern", "min", "max"]:
+                assert attribute not in field, (field, attribute)
+
+
+# Dentro do <form> de renomear, um <button> sem type envia o formulário: o "Desistir" renomearia
+# o tipo. Por isso todo botão dele tem o type escrito, e o único que envia é o "Salvar nome". O
+# "Excluir" fica fora desse <form>, na área própria, para nunca enviá-lo.
+def test_only_save_name_submits_the_rename_form():
+    buttons = rename_form()["buttons"]
+    classes = [button.get("class", "").split() for button in buttons]
+
+    for button in buttons:
+        assert button.get("type") in ("button", "submit"), button
+    submit_classes = [button["class"].split() for button in buttons if button["type"] == "submit"]
+    assert len(submit_classes) == 1
+    assert "type-rename-save" in submit_classes[0]
+    assert not any("type-delete" in button_classes for button_classes in classes)
+
+
+# A armadilha da etapa 11.6: um campo dentro do <form> da tarefa faz o Enter salvar a tarefa. A tela
+# de tipos fica fora do <dialog> do formulário, e nenhum <form> fica dentro de outro.
+def test_types_screen_is_not_inside_the_task_form():
+    finder = html_forms()
+
+    assert "task-types-dialog" in finder.ids
+    assert "task-type-row-template" in finder.ids
+    assert finder.misplaced == []

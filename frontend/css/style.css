@@ -544,3 +544,75 @@ body {
 .form-delete-area .form-hint {
   margin: 0 0 var(--space-2);
 }
+
+/* O "Tipos de tarefa": a largura toda, no fim da página, longe do "Nova tarefa". */
+.open-types-button {
+  width: 100%;
+  margin-top: var(--space-4);
+}
+
+/* Tela de tipos: o título e o "Fechar" na mesma linha. */
+.types-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.types-header .section-title {
+  margin: 0;
+}
+
+/* O resultado da última gravação, dentro da tela. overflow-wrap: anywhere quebra um nome longo
+   sem espaços em vez de empurrar a tela para o lado. */
+.types-notice {
+  margin: var(--space-2) 0 0;
+  color: var(--color-accent);
+  font-weight: bold;
+  overflow-wrap: anywhere;
+}
+
+/* A lista de tipos, sem marcadores, com uma linha fina entre os tipos. */
+.type-list {
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.type-row {
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-border);
+}
+
+/* O nome e a contagem à esquerda, o "Editar" à direita. min-width: 0 deixa o texto encolher, e
+   overflow-wrap: anywhere quebra um nome longo sem espaços, sem rolagem para o lado. */
+.type-view {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.type-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.type-name {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.type-count {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: 14px;
+}
+
+.type-view .button {
+  flex-shrink: 0;
+}
+
+/* Na edição, o campo do nome fica perto dos botões dele. */
+.type-editor .form-field {
+  margin-bottom: var(--space-2);
+}

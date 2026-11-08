@@ -225,9 +225,10 @@ async function loadDay() {
 
 const SAVE_ERROR_TEXT = "Não foi possível salvar. Tente de novo.";
 
-// Enquanto uma gravação espera a resposta (caixinha, Adiar, Salvar, Excluir ou Criar tipo), as
-// caixinhas e os botões Editar e Adiar ficam bloqueados (uma gravação por vez), e o formulário
-// não abre (seção 1 do task-form.js). Os botões do título continuam livres: abrir e fechar não grava nada.
+// Enquanto uma gravação espera a resposta (caixinha, Adiar, Salvar, Excluir ou Criar tipo, e
+// renomear ou excluir tipo na tela de tipos), as caixinhas e os botões Editar e Adiar ficam
+// bloqueados (uma gravação por vez), e nem o formulário nem a tela de tipos abrem (seção 1 do
+// task-form.js e do task-types.js). Os botões do título continuam livres: abrir e fechar não grava nada.
 let saving = false;
 
 function disableTaskControls() {
@@ -351,8 +352,9 @@ function focusCardToggle(taskId) {
 // ---------------------------------------------------------------------------------------------
 
 // Quanto tempo a confirmação espera antes de voltar ao normal, e quanto tempo ela ignora o toque,
-// para um toque duplo não confirmar sozinho. Vale para o Adiar e para o Excluir do formulário
-// (task-form.js), e o meio segundo também para a confirmação da data nova.
+// para um toque duplo não confirmar sozinho. Vale para o Adiar, para o Excluir do formulário
+// (task-form.js) e para o Excluir da tela de tipos (task-types.js), e o meio segundo também para a
+// confirmação da data nova.
 const CONFIRM_TIMEOUT_MS = 5000;
 const DOUBLE_TAP_GUARD_MS = 500;
 
@@ -367,8 +369,8 @@ let readyTimer = null;
 
 // Primeiro toque: pede confirmação, com o texto confirmLabel no botão. Segundo toque no mesmo
 // botão, depois do meio segundo: desfaz a confirmação e faz a ação. action é uma função, que esta
-// aqui chama só na hora certa: o Adiar entrega uma que adia a tarefa do cartão, e o Excluir
-// entrega deleteTask.
+// aqui chama só na hora certa: o Adiar entrega uma que adia a tarefa do cartão, o Excluir da
+// tarefa entrega deleteTask, e o Excluir da tela de tipos, uma que exclui o tipo da linha.
 function handleConfirmClick(button, confirmLabel, action) {
   if (confirmButton !== button) {
     startConfirmation(button, confirmLabel);
@@ -395,8 +397,9 @@ function startConfirmation(button, confirmLabel) {
 }
 
 // Volta o botão ao texto de antes. Chamada pelo tempo, por um toque em outra coisa (no app.js),
-// ao abrir ou fechar um cartão, ao mudar de dia, ao desenhar a lista de novo e, no formulário, ao
-// mexer num campo, ao abrir e ao fechar. Sem confirmação em andamento, não faz nada.
+// ao abrir ou fechar um cartão, ao mudar de dia, ao desenhar a lista de novo e, no formulário e na
+// tela de tipos, ao mexer num campo, ao abrir e ao fechar. Sem confirmação em andamento, não faz
+// nada.
 function cancelConfirmation() {
   clearTimeout(readyTimer);
   clearTimeout(confirmTimer);
